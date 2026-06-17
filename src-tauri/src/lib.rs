@@ -21,6 +21,21 @@ pub fn run() {
                 )?;
             }
 
+            // Position window to the right side of the screen
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(Some(monitor)) = window.current_monitor() {
+                    let screen = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let logical_w = screen.width as f64 / scale;
+                    let logical_h = screen.height as f64 / scale;
+                    let win_w = 400.0;
+                    let win_h = 620.0;
+                    let x = logical_w - win_w - 20.0;
+                    let y = (logical_h - win_h) / 2.0;
+                    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+                }
+            }
+
             // System tray click -> toggle window
             let handle = app.handle().clone();
             if let Some(tray) = app.tray_by_id("main-tray") {
