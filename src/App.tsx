@@ -41,7 +41,7 @@ function App() {
     if (collapsed) {
       win.setSize(new LogicalSize(64, 64))
     } else {
-      win.setSize(new LogicalSize(400, 620))
+      win.setSize(new LogicalSize(424, 644))
     }
   }, [collapsed])
 
@@ -277,7 +277,7 @@ const styles: Record<string, React.CSSProperties> = {
   bubbleOuter: {
     height: '100%',
     display: 'flex',
-    padding: 0,
+    padding: 12,
     background: 'transparent',
   },
   bubble: {
@@ -287,8 +287,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#ffffff',
     borderRadius: 20,
     overflow: 'hidden',
-    boxShadow: '0 8px 40px rgba(0,0,0,0.18), 0 2px 12px rgba(0,0,0,0.08)',
-    border: '1px solid rgba(0,0,0,0.06)',
+    boxShadow: '0 12px 48px rgba(0,0,0,0.25), 0 4px 16px rgba(0,0,0,0.1)',
+    border: '1px solid rgba(0,0,0,0.08)',
   },
   // Drag bar
   dragBar: {

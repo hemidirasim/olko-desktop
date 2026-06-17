@@ -28,8 +28,8 @@ pub fn run() {
                     let scale = monitor.scale_factor();
                     let logical_w = screen.width as f64 / scale;
                     let logical_h = screen.height as f64 / scale;
-                    let win_w = 400.0;
-                    let win_h = 620.0;
+                    let win_w = 424.0;
+                    let win_h = 644.0;
                     let x = logical_w - win_w - 20.0;
                     let y = (logical_h - win_h) / 2.0;
                     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
