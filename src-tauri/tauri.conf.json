@@ -1,13 +1,16 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Olko ERP",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "com.olkoerp.desktop",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173"
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",

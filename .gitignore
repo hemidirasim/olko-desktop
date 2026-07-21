@@ -26,3 +26,8 @@ dist-ssr
 # Tauri build
 src-tauri/target/
 
+
+# Android release imza (git-ə düşməsin)
+olko-release.keystore
+.keystore-password.txt
+src-tauri/gen/android/keystore.properties

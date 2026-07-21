@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { LogicalSize } from '@tauri-apps/api/dpi'
+import olkoLogo from './assets/olko-logo.png'
 import './index.css'
 
 type Screen = 'login' | 'app'
+
+// ✅ 2026-07-17 Android dəstəyi: mobil-də pəncərə API-ləri (resize/hide/drag) yoxdur —
+// tam-ekran rejim, bubble/collapse yalnız desktop-da
+const IS_MOBILE = /android|iphone|ipad/i.test(navigator.userAgent)
 
 interface Session {
   siteUrl: string
@@ -22,6 +27,18 @@ function App() {
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
+    // ✅ 2026-07-18: Mobil-də cross-site iframe cookie problemi (Android WebView üçüncü-tərəf
+    // cookie-ni bloklayır) səbəbindən ERP-ni tam-ekran BİRBAŞA açırıq — app yalnız sayt
+    // seçicisidir, autentifikasiyanı ERP-nin öz first-party login-i idarə edir. Ona görə
+    // mobil-də köhnə (iframe) sessiyasını bərpa etmirik, sadəcə son saytı ön-doldururuq.
+    if (IS_MOBILE) {
+      const lastSite = localStorage.getItem('olko_last_site')
+      // Ön-doldururken biznes adını göstər (https:// və .olkoerp.com soyulur)
+      if (lastSite) {
+        setSiteUrl(lastSite.replace(/^https?:\/\//, '').replace(/\.olkoerp\.com$/, ''))
+      }
+      return
+    }
     const saved = localStorage.getItem('olko_session')
     if (saved) {
       try {
@@ -37,6 +54,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (IS_MOBILE) return
     const win = getCurrentWindow()
     if (collapsed) {
       win.setSize(new LogicalSize(64, 64))
@@ -46,13 +64,35 @@ function App() {
   }, [collapsed])
 
   const normalizeSiteUrl = (raw: string): string => {
-    let url = raw.trim().replace(/\/+$/, '')
-    if (!url.startsWith('http')) url = 'https://' + url
-    return url
+    // ✅ 2026-07-18: istifadəçi biznes adını yazır (məs. "qurman") — nöqtəsiz gələn dəyər
+    // avtomatik `{ad}.olkoerp.com`-a çevrilir. Nöqtəli (tam domen, məs. custom domain
+    // "erp.admedia.az" və ya "qurman.olkoerp.com") olduğu kimi qəbul olunur.
+    let s = raw.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
+    if (s && !s.includes('.')) s = `${s}.olkoerp.com`
+    return `https://${s}`
   }
 
   const handleLogin = async () => {
     setError('')
+
+    // ✅ 2026-07-18 MOBİL: ERP-ni tam-ekran birbaşa aç (top-level naviqasiya).
+    // Səbəb: Android WebView cross-site iframe-də üçüncü-tərəf cookie bloklayır →
+    // fetch-login sessiyası iframe-də tanınmır, ERP təkrar login göstərirdi. Top-level
+    // naviqasiyada ERP first-party olur, öz login-i etibarlı işləyir (tək giriş).
+    if (IS_MOBILE) {
+      if (!siteUrl.trim()) {
+        setError('Sayt ünvanını daxil edin')
+        return
+      }
+      const base = normalizeSiteUrl(siteUrl)
+      localStorage.setItem('olko_last_site', base)
+      setLoading(true)
+      // ✅ 2026-07-18: replace() — giriş ekranını tarixçədən çıxarır ki, telefonun geri
+      // düyməsi ERP daxilində naviqasiya etsin, yoxsa geri giriş ekranına atırdı.
+      window.location.replace(base)
+      return
+    }
+
     if (!siteUrl.trim() || !email.trim() || !password.trim()) {
       setError('Bütün sahələri doldurun')
       return
@@ -98,23 +138,24 @@ function App() {
   }
 
   const handleHide = () => {
+    if (IS_MOBILE) return
     getCurrentWindow().hide()
   }
 
-  // Collapsed bubble — small floating circle
-  if (collapsed) {
+  // Collapsed bubble — small floating circle (yalnız desktop)
+  if (collapsed && !IS_MOBILE) {
     return (
       <div
         style={{
           width: 56,
           height: 56,
           borderRadius: '50%',
-          background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+          background: '#fff',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           cursor: 'pointer',
-          boxShadow: '0 4px 24px rgba(79, 70, 229, 0.4), 0 2px 8px rgba(0,0,0,0.15)',
+          boxShadow: '0 4px 24px rgba(15, 118, 110, 0.28), 0 2px 8px rgba(0,0,0,0.15)',
           margin: 4,
           transition: 'transform 0.2s',
         }}
@@ -122,7 +163,7 @@ function App() {
         onDoubleClick={() => setCollapsed(false)}
         title="İki dəfə kliklə — genişlət"
       >
-        <span style={{ color: '#fff', fontSize: 22, fontWeight: 800, pointerEvents: 'none' }}>O</span>
+        <img src={olkoLogo} alt="Olko" style={{ width: 34, height: 34, pointerEvents: 'none' }} />
       </div>
     )
   }
@@ -130,8 +171,8 @@ function App() {
   // Login screen
   if (screen === 'login') {
     return (
-      <div style={styles.bubbleOuter}>
-        <div style={styles.bubble}>
+      <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
+        <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
           {/* Drag handle */}
           <div style={styles.dragBar} data-tauri-drag-region>
             <div style={styles.dragDots} data-tauri-drag-region>
@@ -140,58 +181,69 @@ function App() {
               <span style={styles.dot} data-tauri-drag-region />
             </div>
             <div style={styles.dragActions}>
+              {!IS_MOBILE && (<>
               <button style={styles.controlBtn} onClick={() => setCollapsed(true)} title="Kiçilt">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12" /></svg>
               </button>
               <button style={styles.controlBtn} onClick={handleHide} title="Gizlət">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
               </button>
+              </>)}
             </div>
           </div>
 
           <div style={styles.loginContent}>
             <div style={styles.logoSection}>
-              <div style={styles.logoIcon}>O</div>
+              <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
               <h1 style={styles.logoText}>Olko ERP</h1>
-              <p style={styles.subtitle}>Hesabınıza daxil olun</p>
+              <p style={styles.subtitle}>
+                {IS_MOBILE ? 'Biznes adınızı daxil edin' : 'Hesabınıza daxil olun'}
+              </p>
             </div>
 
             <div style={styles.form}>
               <div style={styles.field}>
-                <label style={styles.label}>Sayt ünvanı</label>
+                <label style={styles.label}>Biznes adı</label>
                 <input
                   style={styles.input}
                   type="text"
-                  placeholder="cofmof.olkoerp.com"
+                  placeholder="biznesiniz"
                   value={siteUrl}
                   onChange={e => setSiteUrl(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  autoCapitalize="none"
+                  autoCorrect="off"
                 />
               </div>
 
-              <div style={styles.field}>
-                <label style={styles.label}>E-poçt</label>
-                <input
-                  style={styles.input}
-                  type="email"
-                  placeholder="admin@example.com"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                />
-              </div>
+              {/* Mobil-də e-poçt/şifrə ERP-nin öz login səhifəsində daxil edilir (first-party) */}
+              {!IS_MOBILE && (
+                <>
+                  <div style={styles.field}>
+                    <label style={styles.label}>E-poçt</label>
+                    <input
+                      style={styles.input}
+                      type="email"
+                      placeholder="admin@example.com"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                    />
+                  </div>
 
-              <div style={styles.field}>
-                <label style={styles.label}>Şifrə</label>
-                <input
-                  style={styles.input}
-                  type="password"
-                  placeholder="********"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                />
-              </div>
+                  <div style={styles.field}>
+                    <label style={styles.label}>Şifrə</label>
+                    <input
+                      style={styles.input}
+                      type="password"
+                      placeholder="********"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                    />
+                  </div>
+                </>
+              )}
 
               {error && <div style={styles.error}>{error}</div>}
 
@@ -204,7 +256,7 @@ function App() {
                 onClick={handleLogin}
                 disabled={loading}
               >
-                {loading ? 'Gözləyin...' : 'Daxil ol'}
+                {loading ? 'Gözləyin...' : (IS_MOBILE ? 'Sistemə keç' : 'Daxil ol')}
               </button>
             </div>
           </div>
@@ -217,12 +269,12 @@ function App() {
   const base = session?.siteUrl || normalizeSiteUrl(siteUrl)
 
   return (
-    <div style={styles.bubbleOuter}>
-      <div style={styles.bubble}>
+    <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
+      <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
         {/* Drag handle + controls */}
         <div style={styles.dragBar} data-tauri-drag-region>
           <div style={styles.headerInfo} data-tauri-drag-region>
-            <div style={styles.headerLogoBadge}>O</div>
+            <img src={olkoLogo} alt="Olko" style={styles.headerLogoBadge} />
             <span style={styles.headerLabel} data-tauri-drag-region>{session?.email?.split('@')[0] || 'Olko'}</span>
           </div>
           <div style={styles.dragActions}>
@@ -231,12 +283,14 @@ function App() {
                 <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
               </svg>
             </button>
+            {!IS_MOBILE && (<>
             <button style={styles.controlBtn} onClick={() => setCollapsed(true)} title="Kiçilt">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12" /></svg>
             </button>
             <button style={styles.controlBtn} onClick={handleHide} title="Gizlət">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
             </button>
+            </>)}
           </div>
         </div>
 
@@ -272,6 +326,10 @@ function App() {
     </div>
   )
 }
+
+// Mobil-də üzən kart yerinə tam-ekran görünüş
+const mobileOuter: React.CSSProperties = { padding: 0 }
+const mobileBubble: React.CSSProperties = { borderRadius: 0, border: 'none', boxShadow: 'none' }
 
 const styles: Record<string, React.CSSProperties> = {
   bubbleOuter: {
@@ -338,14 +396,7 @@ const styles: Record<string, React.CSSProperties> = {
   headerLogoBadge: {
     width: 22,
     height: 22,
-    borderRadius: 6,
-    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: 700,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    objectFit: 'contain' as const,
   },
   headerLabel: {
     fontSize: 12,
@@ -366,18 +417,10 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 28,
   },
   logoIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: 700,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 60,
+    height: 60,
+    objectFit: 'contain' as const,
     marginBottom: 10,
-    boxShadow: '0 4px 16px rgba(79, 70, 229, 0.3)',
   },
   logoText: {
     fontSize: 20,

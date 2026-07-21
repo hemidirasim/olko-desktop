@@ -1,6 +1,6 @@
 [package]
 name = "olko-desktop"
-version = "0.2.1"
+version = "0.3.0"
 description = "Olko ERP Desktop Client"
 authors = ["Rasim <midiya.agency@gmail.com>"]
 license = "MIT"
@@ -21,4 +21,10 @@ log = "0.4"
 tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
+# ✅ 2026-07-21: Native LAN çap körpüsü (olko-pos ilə eyni)
+base64 = "0.22"
+tiny_http = "0.12"
+
+# ✅ 2026-07-17: `open` crate-i Android-də yoxdur — yalnız desktop target-lərdə
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 open = "5"

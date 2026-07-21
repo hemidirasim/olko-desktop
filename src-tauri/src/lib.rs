@@ -1,11 +1,201 @@
-use tauri::{
-    Manager,
-    tray::TrayIconEvent,
-};
+// ✅ 2026-07-17 Android dəstəyi: tray + pəncərə yerləşdirmə yalnız desktop-dadır —
+// mobil build-də bu API-lər mövcud deyil, cfg(desktop) ilə qorunur.
+#[cfg(desktop)]
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::tray::TrayIconEvent;
+
+// ✅ 2026-07-21: Native LAN çap körpüsü (olko-pos-dan köçürüldü). Mac/Windows kassa
+// QZ Tray/RawBT olmadan birbaşa LAN printerə (IP:9100) TCP ilə çap edir.
+// İki yol: (1) Tauri IPC komandaları (native_ping/test/print) — remote ERP səhifəsi
+// withGlobalTauri + capability remote.urls ilə çağırır; (2) HTTP körpü 127.0.0.1:9631
+// (IPC olmayan hallar üçün ehtiyat). ERP printing servisi əvvəl IPC-ni sınayır.
+use std::io::Write;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+
+use base64::Engine;
+use serde::Deserialize;
+
+const BRIDGE_PORT: u16 = 9631;
+
+#[derive(Deserialize)]
+struct PrintReq {
+    ip: String,
+    #[serde(default = "default_port")]
+    port: u16,
+    data_base64: String,
+}
+
+#[derive(Deserialize)]
+struct TestReq {
+    ip: String,
+    #[serde(default = "default_port")]
+    port: u16,
+}
+
+fn default_port() -> u16 {
+    9100
+}
+
+fn resolve_addr(ip: &str, port: u16) -> Result<std::net::SocketAddr, String> {
+    format!("{ip}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("ünvan xətası: {e}"))?
+        .next()
+        .ok_or_else(|| "ünvan həll olunmadı".to_string())
+}
+
+fn send_to_printer(ip: &str, port: u16, bytes: &[u8]) -> Result<(), String> {
+    let addr = resolve_addr(ip, port)?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| format!("printerə qoşulmaq olmadı ({ip}:{port}): {e}"))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream
+        .write_all(bytes)
+        .map_err(|e| format!("çap göndərmə xətası: {e}"))?;
+    stream.flush().ok();
+    Ok(())
+}
+
+fn cors_headers() -> Vec<tiny_http::Header> {
+    vec![
+        tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+        tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"POST, GET, OPTIONS"[..]).unwrap(),
+        tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap(),
+        tiny_http::Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap(),
+        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+    ]
+}
+
+fn json_response(status: u16, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let mut resp = tiny_http::Response::from_string(body).with_status_code(status);
+    for h in cors_headers() {
+        resp.add_header(h);
+    }
+    resp
+}
+
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn handle_request(mut req: tiny_http::Request) {
+    let method = req.method().clone();
+    let url = req.url().to_string();
+
+    if method == tiny_http::Method::Options {
+        let _ = req.respond(json_response(204, ""));
+        return;
+    }
+    if method == tiny_http::Method::Get && url.starts_with("/health") {
+        let _ = req.respond(json_response(200, r#"{"ok":true,"app":"olko-desktop"}"#));
+        return;
+    }
+    if method == tiny_http::Method::Post && url.starts_with("/print") {
+        let mut body = String::new();
+        if req.as_reader().read_to_string(&mut body).is_err() {
+            let _ = req.respond(json_response(400, r#"{"ok":false,"error":"body oxunmadı"}"#));
+            return;
+        }
+        match serde_json::from_str::<PrintReq>(&body) {
+            Ok(p) => match base64::engine::general_purpose::STANDARD.decode(p.data_base64.trim()) {
+                Ok(bytes) if !bytes.is_empty() => match send_to_printer(&p.ip, p.port, &bytes) {
+                    Ok(_) => {
+                        let _ = req.respond(json_response(200, r#"{"ok":true}"#));
+                    }
+                    Err(e) => {
+                        let body = format!(r#"{{"ok":false,"error":{}}}"#, json_str(&e));
+                        let _ = req.respond(json_response(502, &body));
+                    }
+                },
+                Ok(_) => {
+                    let _ = req.respond(json_response(400, r#"{"ok":false,"error":"boş data"}"#));
+                }
+                Err(e) => {
+                    let body = format!(r#"{{"ok":false,"error":{}}}"#, json_str(&format!("base64: {e}")));
+                    let _ = req.respond(json_response(400, &body));
+                }
+            },
+            Err(e) => {
+                let body = format!(r#"{{"ok":false,"error":{}}}"#, json_str(&format!("json: {e}")));
+                let _ = req.respond(json_response(400, &body));
+            }
+        }
+        return;
+    }
+    if method == tiny_http::Method::Post && url.starts_with("/test") {
+        let mut body = String::new();
+        let _ = req.as_reader().read_to_string(&mut body);
+        match serde_json::from_str::<TestReq>(&body) {
+            Ok(t) => match resolve_addr(&t.ip, t.port)
+                .and_then(|a| TcpStream::connect_timeout(&a, Duration::from_secs(4)).map_err(|e| e.to_string()))
+            {
+                Ok(_) => {
+                    let _ = req.respond(json_response(200, r#"{"ok":true}"#));
+                }
+                Err(e) => {
+                    let body = format!(r#"{{"ok":false,"error":{}}}"#, json_str(&e));
+                    let _ = req.respond(json_response(502, &body));
+                }
+            },
+            Err(_) => {
+                let _ = req.respond(json_response(400, r#"{"ok":false,"error":"json"}"#));
+            }
+        }
+        return;
+    }
+    let _ = req.respond(json_response(404, r#"{"ok":false,"error":"not found"}"#));
+}
+
+#[tauri::command]
+fn native_ping() -> bool {
+    true
+}
+
+#[tauri::command]
+fn native_test(ip: String, port: Option<u16>) -> Result<(), String> {
+    let p = port.unwrap_or(9100);
+    let addr = resolve_addr(&ip, p)?;
+    TcpStream::connect_timeout(&addr, Duration::from_secs(4))
+        .map(|_| ())
+        .map_err(|e| format!("printerə qoşulmaq olmadı ({ip}:{p}): {e}"))
+}
+
+#[tauri::command]
+fn native_print(ip: String, port: Option<u16>, data_base64: String) -> Result<(), String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("boş data".to_string());
+    }
+    send_to_printer(&ip, port.unwrap_or(9100), &bytes)
+}
+
+fn start_bridge() {
+    std::thread::spawn(|| {
+        match tiny_http::Server::http(("127.0.0.1", BRIDGE_PORT)) {
+            Ok(server) => {
+                log::info!("Olko çap körpüsü: http://127.0.0.1:{BRIDGE_PORT}");
+                for req in server.incoming_requests() {
+                    std::thread::spawn(move || handle_request(req));
+                }
+            }
+            Err(e) => {
+                log::error!("çap körpüsü başlamadı: {e}");
+            }
+        }
+    });
+}
 
 #[tauri::command]
 fn open_external(url: String) {
+    // `open` crate-i yalnız desktop-da mövcuddur; mobil-də webview daxilində qalırıq
+    #[cfg(desktop)]
     let _ = open::that(url);
+    #[cfg(mobile)]
+    let _ = url;
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -21,41 +211,52 @@ pub fn run() {
                 )?;
             }
 
-            // Position window to the right side of the screen
-            if let Some(window) = app.get_webview_window("main") {
-                if let Ok(Some(monitor)) = window.current_monitor() {
-                    let screen = monitor.size();
-                    let scale = monitor.scale_factor();
-                    let logical_w = screen.width as f64 / scale;
-                    let logical_h = screen.height as f64 / scale;
-                    let win_w = 424.0;
-                    let win_h = 644.0;
-                    let x = logical_w - win_w - 20.0;
-                    let y = (logical_h - win_h) / 2.0;
-                    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-                }
-            }
+            // ✅ Native çap körpüsünü başlat (127.0.0.1:9631) — IPC-nin ehtiyatı
+            start_bridge();
 
-            // System tray click -> toggle window
-            let handle = app.handle().clone();
-            if let Some(tray) = app.tray_by_id("main-tray") {
-                tray.on_tray_icon_event(move |_tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+            #[cfg(desktop)]
+            {
+                // Position window to the right side of the screen
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(Some(monitor)) = window.current_monitor() {
+                        let screen = monitor.size();
+                        let scale = monitor.scale_factor();
+                        let logical_w = screen.width as f64 / scale;
+                        let logical_h = screen.height as f64 / scale;
+                        let win_w = 424.0;
+                        let win_h = 644.0;
+                        let x = logical_w - win_w - 20.0;
+                        let y = (logical_h - win_h) / 2.0;
+                        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+                    }
+                }
+
+                // System tray click -> toggle window
+                let handle = app.handle().clone();
+                if let Some(tray) = app.tray_by_id("main-tray") {
+                    tray.on_tray_icon_event(move |_tray, event| {
+                        if let TrayIconEvent::Click { .. } = event {
+                            if let Some(window) = handle.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
                             }
                         }
-                    }
-                });
+                    });
+                }
             }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![open_external])
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            native_ping,
+            native_test,
+            native_print
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
