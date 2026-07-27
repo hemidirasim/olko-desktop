@@ -57,6 +57,45 @@ jobs:
           # `latest.json` və imzalı artefaktlar YARADILMIR → updater işləməz.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # ✅ 2026-07-27 (axşam): Apple Developer ID sertifikatı alındı → macOS imza BƏRPA.
+          # Sertifikat: "Developer ID Application: Midiya Agency, MMC (CAD4QCJH2Q)"
+          # ⚠️ QAYDA: bu dəyişənlər YALNIZ secret-lər REAL dəyərlə doldurulanda saxlanmalıdır.
+          # Boş secret → GitHub env-i boş sətir kimi verir → tauri-action `security import`
+          # çağırır → "failed to import keychain certificate" (v0.4.0-da bu baş verdi).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarizasiya (Apple serverində təsdiq) — app-specific password ilə
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ✅ 2026-07-27: avtomatik yeniləmə imzası. Bu dəyişənlər olmadan
+          # `latest.json` və imzalı artefaktlar YARADILMIR → updater işləməz.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # ⚠️ 2026-07-27: macOS imza dəyişənləri MÜVƏQQƏTİ ÇIXARILDI.
           # Səbəb (v0.4.0 relizində təsdiq olundu): APPLE_* secret-ləri mövcud olmasa da
           # GitHub onları BOŞ SƏTİR kimi təyin edir; tauri-action isə dəyişən "var" sayıb
