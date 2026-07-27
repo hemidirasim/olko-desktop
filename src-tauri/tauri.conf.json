@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Olko ERP",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "identifier": "com.olkoerp.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -59,10 +59,7 @@
         "installMode": "currentUser"
       }
     },
-    "createUpdaterArtifacts": true,
-    "macOS": {
-      "signingIdentity": "-"
-    }
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {

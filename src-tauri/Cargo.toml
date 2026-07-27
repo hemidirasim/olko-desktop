@@ -1,6 +1,6 @@
 [package]
 name = "olko-desktop"
-version = "0.4.4"
+version = "0.4.5"
 description = "Olko ERP Desktop Client"
 authors = ["Rasim <midiya.agency@gmail.com>"]
 license = "MIT"
