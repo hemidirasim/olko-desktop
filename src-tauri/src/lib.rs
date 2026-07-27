@@ -4,6 +4,7 @@
 use tauri::Manager;
 #[cfg(desktop)]
 use tauri::tray::TrayIconEvent;
+use tauri::Emitter;
 
 // ✅ 2026-07-21: Native LAN çap körpüsü (olko-pos-dan köçürüldü). Mac/Windows kassa
 // QZ Tray/RawBT olmadan birbaşa LAN printerə (IP:9100) TCP ilə çap edir.
@@ -225,22 +226,37 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                // Position window to the right side of the screen
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(Some(monitor)) = window.current_monitor() {
-                        let screen = monitor.size();
-                        let scale = monitor.scale_factor();
-                        let logical_w = screen.width as f64 / scale;
-                        let logical_h = screen.height as f64 / scale;
-                        let win_w = 424.0;
-                        let win_h = 644.0;
-                        let x = logical_w - win_w - 20.0;
-                        let y = (logical_h - win_h) / 2.0;
-                        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+                // ✅ 2026-07-27: pəncərəni ekranın SAĞ kənarına yerləşdirən blok SİLİNDİ.
+                // Bubble dövründən qalmışdı və sabit 424×644 ölçüləri ilə hesablayırdı →
+                // konfiqdəki `center: true` / `maximized: true` heç bir təsir göstərmirdi
+                // ("proqram hər dəfə sağda açılır"). İndi mövqeyi OS/konfiq idarə edir.
+
+                // System tray click -> toggle window
+                // ✅ Tray menyusu: app-daxili header götürüldüyü üçün sayt dəyişmə/çıxış
+                // əməliyyatları buradan əlçatandır (sağ klik → menyu).
+                {
+                    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                    let reset = MenuItemBuilder::with_id("reset_site", "Saytı dəyiş / Çıxış").build(app)?;
+                    let quit = MenuItemBuilder::with_id("quit_app", "Proqramdan çıx").build(app)?;
+                    let menu = MenuBuilder::new(app).items(&[&reset, &quit]).build()?;
+                    if let Some(tray) = app.tray_by_id("main-tray") {
+                        let _ = tray.set_menu(Some(menu));
+                        let h = app.handle().clone();
+                        tray.on_menu_event(move |_tray, event| match event.id().as_ref() {
+                            "reset_site" => {
+                                if let Some(w) = h.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                    // Frontend bu hadisəni dinləyir → sessiyanı təmizləyir
+                                    let _ = w.emit("olko://reset-session", ());
+                                }
+                            }
+                            "quit_app" => h.exit(0),
+                            _ => {}
+                        });
                     }
                 }
 
-                // System tray click -> toggle window
                 let handle = app.handle().clone();
                 if let Some(tray) = app.tray_by_id("main-tray") {
                     tray.on_tray_icon_event(move |_tray, event| {

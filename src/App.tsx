@@ -132,6 +132,19 @@ function App() {
     if (e.key === 'Enter') handleLogin()
   }
 
+  // ✅ Tray menyusundan "Saytı dəyiş / Çıxış" → sessiyanı təmizlə, giriş ekranına qayıt
+  useEffect(() => {
+    if (IS_MOBILE) return
+    let un: (() => void) | undefined
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        un = await listen('olko://reset-session', () => { handleLogout() })
+      } catch { /* brauzerdə işləyirsə tray yoxdur */ }
+    })()
+    return () => { if (un) un() }
+  }, [])
+
   // Yeniləmə qapısı — yoxlama bitənə (və ya istifadəçi "Sonra" seçənə) qədər
   if (!updateChecked) return <UpdateGate onDone={() => setUpdateChecked(true)} />
 
@@ -219,43 +232,10 @@ function App() {
   return (
     <div style={styles.appOuter}>
       <div style={styles.appShell}>
-        {/* Üst zolaq — istifadəçi + sürətli naviqasiya (OS başlıq zolağının altında) */}
-        <div style={styles.dragBar} data-tauri-drag-region>
-          <div style={styles.headerInfo} data-tauri-drag-region>
-            <img src={olkoLogo} alt="Olko" style={styles.headerLogoBadge} />
-            <span style={styles.headerLabel} data-tauri-drag-region>{session?.email?.split('@')[0] || 'Olko'}</span>
-          </div>
-          <div style={styles.dragActions}>
-            <button style={styles.controlBtn} onClick={handleLogout} title="Çıxış">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
-            </button>
-            {/* Kiçilt/Gizlət düymələri SİLİNDİ — OS başlıq zolağı bu işi görür */}
-          </div>
-        </div>
-
-        {/* Quick nav */}
-        <div style={styles.navBar}>
-          {[
-            { label: '📊', title: 'Dashboard', path: '/dashboard' },
-            { label: '📝', title: 'Notlar', path: '/notes' },
-            { label: '🛒', title: 'Satış', path: '/sales/quick' },
-            { label: '📦', title: 'Stok', path: '/stock/items' },
-          ].map(item => (
-            <button
-              key={item.path}
-              style={styles.navBtn}
-              title={item.title}
-              onClick={() => {
-                if (iframeRef.current) iframeRef.current.src = `${base}${item.path}`
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-
+        {/* ✅ 2026-07-27: app-daxili header və sürətli naviqasiya SİLİNDİ.
+            Səbəb (istifadəçi): "proqramın yuxarısındakı bu dəxlisiz header-ə ehtiyac yoxdur"
+            — ERP-nin öz başlığı/menyusu var, ikisi üst-üstə düşürdü.
+            Sayt dəyişmə / çıxış indi TRAY MENYUSUNDADIR (sağ klik → "Saytı dəyiş / Çıxış"). */}
         {/* ERP iframe */}
         <iframe
           ref={iframeRef}
