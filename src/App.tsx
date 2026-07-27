@@ -217,9 +217,9 @@ function App() {
   const base = session?.siteUrl || normalizeSiteUrl(siteUrl)
 
   return (
-    <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
-      <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
-        {/* Drag handle + controls */}
+    <div style={styles.appOuter}>
+      <div style={styles.appShell}>
+        {/* Üst zolaq — istifadəçi + sürətli naviqasiya (OS başlıq zolağının altında) */}
         <div style={styles.dragBar} data-tauri-drag-region>
           <div style={styles.headerInfo} data-tauri-drag-region>
             <img src={olkoLogo} alt="Olko" style={styles.headerLogoBadge} />
@@ -273,6 +273,21 @@ const mobileOuter: React.CSSProperties = { padding: 0 }
 const mobileBubble: React.CSSProperties = { borderRadius: 0, border: 'none', boxShadow: 'none' }
 
 const styles: Record<string, React.CSSProperties> = {
+  // ✅ 2026-07-27: ERP ekranı TAM PƏNCƏRƏNİ doldurur.
+  // Əvvəl giriş kartı ilə eyni `bubble` stilini işlədirdi (maxWidth 420) →
+  // 1440px pəncərədə ERP ortada kiçik kartda görünürdü ("proqram içində proqram").
+  appOuter: {
+    height: '100%',
+    display: 'flex',
+    background: '#ffffff',
+  },
+  appShell: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    background: '#ffffff',
+  },
   bubbleOuter: {
     // ✅ Normal pəncərədə giriş kartı ortada dayanır (əvvəl 424px bubble-ı doldururdu)
     height: '100%',
@@ -446,7 +461,8 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     border: 'none',
     width: '100%',
-    borderRadius: '0 0 20px 20px',
+    // Kart yuvarlaqlığı GÖTÜRÜLDÜ — ERP artıq tam pəncərəni doldurur
+    borderRadius: 0,
   },
 }
 
