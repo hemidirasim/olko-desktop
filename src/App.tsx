@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { LogicalSize } from '@tauri-apps/api/dpi'
 import olkoLogo from './assets/olko-logo.png'
+import UpdateGate from './UpdateGate'
 import './index.css'
 
 type Screen = 'login' | 'app'
@@ -16,6 +15,9 @@ interface Session {
 }
 
 function App() {
+  // ✅ 2026-07-27: proqram açılanda ƏVVƏL yeniləmə yoxlanır (uzaq domenə keçəndən sonra
+  // Tauri plagin API-ləri əlçatan olmur → yoxlama məhz burada aparılmalıdır).
+  const [updateChecked, setUpdateChecked] = useState(false)
   const [screen, setScreen] = useState<Screen>('login')
   const [siteUrl, setSiteUrl] = useState('')
   const [email, setEmail] = useState('')
@@ -23,7 +25,6 @@ function App() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [session, setSession] = useState<Session | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
@@ -53,15 +54,9 @@ function App() {
     }
   }, [])
 
-  useEffect(() => {
-    if (IS_MOBILE) return
-    const win = getCurrentWindow()
-    if (collapsed) {
-      win.setSize(new LogicalSize(64, 64))
-    } else {
-      win.setSize(new LogicalSize(424, 644))
-    }
-  }, [collapsed])
+  // ✅ 2026-07-27: pəncərə ölçüsünü ZORLA təyin edən effekt SİLİNDİ.
+  // Əvvəl hər renderdə 424×644-ə (bubble) salınırdı — istifadəçi böyüdə bilmirdi.
+  // İndi ölçü/mövqe OS-in və istifadəçinin nəzarətindədir (adi masaüstü proqramı kimi).
 
   const normalizeSiteUrl = (raw: string): string => {
     // ✅ 2026-07-18: istifadəçi biznes adını yazır (məs. "qurman") — nöqtəsiz gələn dəyər
@@ -137,61 +132,14 @@ function App() {
     if (e.key === 'Enter') handleLogin()
   }
 
-  const handleHide = () => {
-    if (IS_MOBILE) return
-    getCurrentWindow().hide()
-  }
-
-  // Collapsed bubble — small floating circle (yalnız desktop)
-  if (collapsed && !IS_MOBILE) {
-    return (
-      <div
-        style={{
-          width: 56,
-          height: 56,
-          borderRadius: '50%',
-          background: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          boxShadow: '0 4px 24px rgba(15, 118, 110, 0.28), 0 2px 8px rgba(0,0,0,0.15)',
-          margin: 4,
-          transition: 'transform 0.2s',
-        }}
-        data-tauri-drag-region
-        onDoubleClick={() => setCollapsed(false)}
-        title="İki dəfə kliklə — genişlət"
-      >
-        <img src={olkoLogo} alt="Olko" style={{ width: 34, height: 34, pointerEvents: 'none' }} />
-      </div>
-    )
-  }
+  // Yeniləmə qapısı — yoxlama bitənə (və ya istifadəçi "Sonra" seçənə) qədər
+  if (!updateChecked) return <UpdateGate onDone={() => setUpdateChecked(true)} />
 
   // Login screen
   if (screen === 'login') {
     return (
       <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
         <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
-          {/* Drag handle */}
-          <div style={styles.dragBar} data-tauri-drag-region>
-            <div style={styles.dragDots} data-tauri-drag-region>
-              <span style={styles.dot} data-tauri-drag-region />
-              <span style={styles.dot} data-tauri-drag-region />
-              <span style={styles.dot} data-tauri-drag-region />
-            </div>
-            <div style={styles.dragActions}>
-              {!IS_MOBILE && (<>
-              <button style={styles.controlBtn} onClick={() => setCollapsed(true)} title="Kiçilt">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12" /></svg>
-              </button>
-              <button style={styles.controlBtn} onClick={handleHide} title="Gizlət">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-              </button>
-              </>)}
-            </div>
-          </div>
-
           <div style={styles.loginContent}>
             <div style={styles.logoSection}>
               <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
@@ -283,14 +231,7 @@ function App() {
                 <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
               </svg>
             </button>
-            {!IS_MOBILE && (<>
-            <button style={styles.controlBtn} onClick={() => setCollapsed(true)} title="Kiçilt">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12" /></svg>
-            </button>
-            <button style={styles.controlBtn} onClick={handleHide} title="Gizlət">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-            </button>
-            </>)}
+            {/* Kiçilt/Gizlət düymələri SİLİNDİ — OS başlıq zolağı bu işi görür */}
           </div>
         </div>
 
@@ -333,13 +274,18 @@ const mobileBubble: React.CSSProperties = { borderRadius: 0, border: 'none', box
 
 const styles: Record<string, React.CSSProperties> = {
   bubbleOuter: {
+    // ✅ Normal pəncərədə giriş kartı ortada dayanır (əvvəl 424px bubble-ı doldururdu)
     height: '100%',
     display: 'flex',
-    padding: 12,
-    background: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    background: '#f1f5f9',
   },
   bubble: {
-    flex: 1,
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '92%',
     display: 'flex',
     flexDirection: 'column',
     background: '#ffffff',

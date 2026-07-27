@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Olko ERP",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "com.olkoerp.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -15,18 +15,22 @@
       {
         "label": "main",
         "title": "Olko ERP",
-        "width": 424,
-        "height": 644,
-        "resizable": false,
-        "decorations": false,
-        "center": false,
-        "x": 1100,
-        "y": 80,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
+        "width": 1440,
+        "height": 900,
+        "resizable": true,
+        "decorations": true,
+        "center": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
         "visible": true,
-        "transparent": true,
-        "shadow": false
+        "transparent": false,
+        "shadow": true,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "fullscreen": false
       }
     ],
     "trayIcon": {
@@ -53,14 +57,18 @@
       "nsis": {
         "installMode": "currentUser"
       }
-    }
+    },
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
       "endpoints": [
         "https://github.com/hemidirasim/olko-desktop/releases/latest/download/latest.json"
       ],
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM5MTZCQ0Q1OUVCMDUyNkQKUldSdFVyQ2UxYndXeVlyV3pYMzA3aUhtSUhzZExxQ1AxSDZnZ0N3QmZDVjRQbklwNi9DVUQzZUcK",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

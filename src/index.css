@@ -15,3 +15,6 @@ body {
   color: #1e293b;
   -webkit-font-smoothing: antialiased;
 }
+
+/* ✅ 2026-07-27: UpdateGate spinner */
+@keyframes olko-spin { to { transform: rotate(360deg); } }
