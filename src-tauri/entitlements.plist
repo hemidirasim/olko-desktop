@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ✅ 2026-07-27: LAN printerinə (IP:9100) qoşulmaq üçün.
+         Hardened runtime (notarizasiya tələbi) altında bu entitlement olmadan
+         şəbəkə çıxışı məhdudlaşır. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Native çap körpüsü 127.0.0.1:9631-də dinləyir -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+</dict>
+</plist>

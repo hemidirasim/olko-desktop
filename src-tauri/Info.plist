@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ✅ 2026-07-27: macOS 15+ yerli şəbəkə məxfiliyi.
+         Bu açar OLMADAN sistem icazə pəncərəsini düzgün göstərmir və LAN
+         bağlantıları "No route to host (os error 65)" ilə rədd edilir —
+         məhz bu, çap diaqnostikasında 3-cü/4-cü addımın xətası idi. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Olko ERP mətbəx və kassa çeklərini eyni Wi-Fi şəbəkəsindəki printerlərə göndərmək üçün yerli şəbəkəyə müraciət edir.</string>
+</dict>
+</plist>
