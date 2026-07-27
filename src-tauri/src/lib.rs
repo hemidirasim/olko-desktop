@@ -4,7 +4,6 @@
 use tauri::Manager;
 #[cfg(desktop)]
 use tauri::tray::TrayIconEvent;
-use tauri::Emitter;
 
 // ✅ 2026-07-21: Native LAN çap körpüsü (olko-pos-dan köçürüldü). Mac/Windows kassa
 // QZ Tray/RawBT olmadan birbaşa LAN printerə (IP:9100) TCP ilə çap edir.
@@ -232,6 +231,21 @@ pub fn run() {
                 // ("proqram hər dəfə sağda açılır"). İndi mövqeyi OS/konfiq idarə edir.
 
                 // System tray click -> toggle window
+                // ✅ 2026-07-27 (macOS davranışı): qırmızı X pəncərəni GİZLƏDİR, proqramı
+                // bağlamır — Dock ikonu qalır, ⌘Tab-da görünür (adi Mac proqramı kimi).
+                // Əvvəl X proqramı tam söndürürdü və Dock-dan itirdi.
+                // Tam çıxış: ⌘Q və ya tray → "Proqramdan çıx".
+                #[cfg(target_os = "macos")]
+                if let Some(window) = app.get_webview_window("main") {
+                    let w = window.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = w.hide();
+                        }
+                    });
+                }
+
                 // ✅ Tray menyusu: app-daxili header götürüldüyü üçün sayt dəyişmə/çıxış
                 // əməliyyatları buradan əlçatandır (sağ klik → menyu).
                 {
@@ -247,8 +261,16 @@ pub fn run() {
                                 if let Some(w) = h.get_webview_window("main") {
                                     let _ = w.show();
                                     let _ = w.set_focus();
-                                    // Frontend bu hadisəni dinləyir → sessiyanı təmizləyir
-                                    let _ = w.emit("olko://reset-session", ());
+                                    // ⚠️ ERP uzaq domenində Tauri IPC yoxdur → hadisə yayımlamaq
+                                    // fayda vermir. Ona görə webview-i app səhifəsinə QAYTARIRIQ;
+                                    // `?setup=1` frontend-ə avtomatik keçidi dayandırmağı bildirir.
+                                    #[cfg(target_os = "windows")]
+                                    let home = "http://tauri.localhost/?setup=1";
+                                    #[cfg(not(target_os = "windows"))]
+                                    let home = "tauri://localhost/?setup=1";
+                                    if let Ok(u) = home.parse() {
+                                        let _ = w.navigate(u);
+                                    }
                                 }
                             }
                             "quit_app" => h.exit(0),
@@ -282,6 +304,17 @@ pub fn run() {
             native_test,
             native_print
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            // ✅ macOS: Dock ikonuna klik (Reopen) — X ilə gizlədilmiş pəncərəni geri gətir.
+            // Bu olmasa X-dən sonra Dock ikonu işə yaramır (pəncərə bir daha açılmır).
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(w) = _app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        });
 }

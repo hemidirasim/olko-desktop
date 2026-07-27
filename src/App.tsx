@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import olkoLogo from './assets/olko-logo.png'
 import UpdateGate from './UpdateGate'
 import './index.css'
@@ -9,48 +9,33 @@ type Screen = 'login' | 'app'
 // tam-ekran rejim, bubble/collapse yalnız desktop-da
 const IS_MOBILE = /android|iphone|ipad/i.test(navigator.userAgent)
 
-interface Session {
-  siteUrl: string
-  email: string
-}
-
 function App() {
   // ✅ 2026-07-27: proqram açılanda ƏVVƏL yeniləmə yoxlanır (uzaq domenə keçəndən sonra
   // Tauri plagin API-ləri əlçatan olmur → yoxlama məhz burada aparılmalıdır).
   const [updateChecked, setUpdateChecked] = useState(false)
   const [screen, setScreen] = useState<Screen>('login')
   const [siteUrl, setSiteUrl] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [session, setSession] = useState<Session | null>(null)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
-    // ✅ 2026-07-18: Mobil-də cross-site iframe cookie problemi (Android WebView üçüncü-tərəf
-    // cookie-ni bloklayır) səbəbindən ERP-ni tam-ekran BİRBAŞA açırıq — app yalnız sayt
-    // seçicisidir, autentifikasiyanı ERP-nin öz first-party login-i idarə edir. Ona görə
-    // mobil-də köhnə (iframe) sessiyasını bərpa etmirik, sadəcə son saytı ön-doldururuq.
-    if (IS_MOBILE) {
-      const lastSite = localStorage.getItem('olko_last_site')
-      // Ön-doldururken biznes adını göstər (https:// və .olkoerp.com soyulur)
-      if (lastSite) {
-        setSiteUrl(lastSite.replace(/^https?:\/\//, '').replace(/\.olkoerp\.com$/, ''))
-      }
+    // ✅ 2026-07-27: hər iki platformada EYNİ məntiq — app yalnız sayt seçicisidir.
+    // Tray menyusundan "Saytı dəyiş" seçiləndə Rust bizi `?setup=1` ilə geri gətirir;
+    // o halda avtomatik keçid ETMİRİK, seçim ekranını göstəririk.
+    const wantsSetup = new URLSearchParams(window.location.search).has('setup')
+    const lastSite = localStorage.getItem('olko_last_site')
+
+    if (wantsSetup) {
+      localStorage.removeItem('olko_last_site')
+      if (lastSite) setSiteUrl(lastSite.replace(/^https?:\/\//, '').replace(/\.olkoerp\.com$/, ''))
       return
     }
-    const saved = localStorage.getItem('olko_session')
-    if (saved) {
-      try {
-        const s = JSON.parse(saved) as Session
-        if (s.siteUrl && s.email) {
-          setSession(s)
-          setSiteUrl(s.siteUrl)
-          setEmail(s.email)
-          setScreen('app')
-        }
-      } catch {}
+    if (lastSite) {
+      // Saxlanmış sayt var → birbaşa ERP-yə keç (ERP öz login-ini göstərəcək,
+      // sessiya varsa heç nə soruşmayacaq — brauzerdəki kimi).
+      setLoading(true)
+      window.location.replace(lastSite)
+      return
     }
   }, [])
 
@@ -67,65 +52,31 @@ function App() {
     return `https://${s}`
   }
 
-  const handleLogin = async () => {
+  const handleLogin = () => {
     setError('')
-
-    // ✅ 2026-07-18 MOBİL: ERP-ni tam-ekran birbaşa aç (top-level naviqasiya).
-    // Səbəb: Android WebView cross-site iframe-də üçüncü-tərəf cookie bloklayır →
-    // fetch-login sessiyası iframe-də tanınmır, ERP təkrar login göstərirdi. Top-level
-    // naviqasiyada ERP first-party olur, öz login-i etibarlı işləyir (tək giriş).
-    if (IS_MOBILE) {
-      if (!siteUrl.trim()) {
-        setError('Sayt ünvanını daxil edin')
-        return
-      }
-      const base = normalizeSiteUrl(siteUrl)
-      localStorage.setItem('olko_last_site', base)
-      setLoading(true)
-      // ✅ 2026-07-18: replace() — giriş ekranını tarixçədən çıxarır ki, telefonun geri
-      // düyməsi ERP daxilində naviqasiya etsin, yoxsa geri giriş ekranına atırdı.
-      window.location.replace(base)
+    // ✅ 2026-07-27: MASAÜSTÜ də mobil ilə EYNİ modelə keçdi — app yalnız SAYT SEÇİCİSİDİR.
+    //
+    // Əvvəl masaüstündə app `fetch` ilə login edib ERP-ni IFRAME-də açırdı. İframe
+    // cross-site olduğu üçün brauzer üçüncü-tərəf cookie-ni bloklayır → ERP sessiyanı
+    // tanımır və ÖZ login səhifəsini yenidən göstərirdi (istifadəçi iki dəfə şifrə yazırdı).
+    // Mobil bu problemi 2026-07-18-də top-level naviqasiya ilə həll etmişdi; indi masaüstü
+    // də eynidir: yalnız biznes adı soruşulur, autentifikasiyanı ERP-nin öz first-party
+    // login-i idarə edir → TƏK giriş.
+    if (!siteUrl.trim()) {
+      setError('Biznes adını daxil edin')
       return
     }
-
-    if (!siteUrl.trim() || !email.trim() || !password.trim()) {
-      setError('Bütün sahələri doldurun')
-      return
-    }
-
-    setLoading(true)
     const base = normalizeSiteUrl(siteUrl)
-
-    try {
-      const res = await fetch(`${base}/api/method/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ usr: email.trim(), pwd: password }),
-        credentials: 'include',
-      })
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.message || 'Login uğursuz oldu')
-      }
-
-      const s: Session = { siteUrl: base, email: email.trim() }
-      localStorage.setItem('olko_session', JSON.stringify(s))
-      setSession(s)
-      setPassword('')
-      setScreen('app')
-    } catch (err: any) {
-      setError(err.message || 'Bağlantı xətası')
-    } finally {
-      setLoading(false)
-    }
+    localStorage.setItem('olko_last_site', base)
+    setLoading(true)
+    // replace() — giriş ekranı tarixçədən çıxır (geri düyməsi ora qayıtmasın)
+    window.location.replace(base)
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('olko_session')
-    setSession(null)
+    // Tray "Saytı dəyiş / Çıxış" → saxlanmış saytı unut, seçim ekranına qayıt
+    localStorage.removeItem('olko_last_site')
     setScreen('login')
-    setPassword('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -158,7 +109,7 @@ function App() {
               <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
               <h1 style={styles.logoText}>Olko ERP</h1>
               <p style={styles.subtitle}>
-                {IS_MOBILE ? 'Biznes adınızı daxil edin' : 'Hesabınıza daxil olun'}
+                Biznes adınızı daxil edin
               </p>
             </div>
 
@@ -177,34 +128,8 @@ function App() {
                 />
               </div>
 
-              {/* Mobil-də e-poçt/şifrə ERP-nin öz login səhifəsində daxil edilir (first-party) */}
-              {!IS_MOBILE && (
-                <>
-                  <div style={styles.field}>
-                    <label style={styles.label}>E-poçt</label>
-                    <input
-                      style={styles.input}
-                      type="email"
-                      placeholder="admin@example.com"
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                    />
-                  </div>
-
-                  <div style={styles.field}>
-                    <label style={styles.label}>Şifrə</label>
-                    <input
-                      style={styles.input}
-                      type="password"
-                      placeholder="********"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                    />
-                  </div>
-                </>
-              )}
+              {/* ✅ E-poçt/şifrə sahələri SİLİNDİ — ERP-nin öz login səhifəsi
+                  first-party işlədiyi üçün burada təkrar soruşmaq lazım deyil. */}
 
               {error && <div style={styles.error}>{error}</div>}
 
@@ -226,26 +151,10 @@ function App() {
     )
   }
 
-  // App screen — iframe with ERP
-  const base = session?.siteUrl || normalizeSiteUrl(siteUrl)
-
-  return (
-    <div style={styles.appOuter}>
-      <div style={styles.appShell}>
-        {/* ✅ 2026-07-27: app-daxili header və sürətli naviqasiya SİLİNDİ.
-            Səbəb (istifadəçi): "proqramın yuxarısındakı bu dəxlisiz header-ə ehtiyac yoxdur"
-            — ERP-nin öz başlığı/menyusu var, ikisi üst-üstə düşürdü.
-            Sayt dəyişmə / çıxış indi TRAY MENYUSUNDADIR (sağ klik → "Saytı dəyiş / Çıxış"). */}
-        {/* ERP iframe */}
-        <iframe
-          ref={iframeRef}
-          src={`${base}/notes`}
-          style={styles.iframe}
-          title="Olko ERP"
-        />
-      </div>
-    </div>
-  )
+  // ✅ 2026-07-27: iframe-li "app ekranı" SİLİNDİ — `location.replace` ilə ERP-yə
+  // keçdikdən sonra bu React tətbiqi ümumiyyətlə yüklü qalmır. Ona görə iframe,
+  // session state və sürətli naviqasiya kodu ölü idi.
+  return null
 }
 
 // Mobil-də üzən kart yerinə tam-ekran görünüş
