@@ -57,14 +57,19 @@ jobs:
           # `latest.json` və imzalı artefaktlar YARADILMIR → updater işləməz.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS imza + notarizasiya (yalnız macOS runner-də istifadə olunur;
-          # secret-lər boşdursa imzasız build olur — mövcud davranış pozulmur).
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # ⚠️ 2026-07-27: macOS imza dəyişənləri MÜVƏQQƏTİ ÇIXARILDI.
+          # Səbəb (v0.4.0 relizində təsdiq olundu): APPLE_* secret-ləri mövcud olmasa da
+          # GitHub onları BOŞ SƏTİR kimi təyin edir; tauri-action isə dəyişən "var" sayıb
+          # `security import` çağırır → "failed to import keychain certificate" ilə hər iki
+          # Mac build-i partlayır (Windows normal keçir). Əvvəlki 2026-07-21 kommiti bu bloku
+          # əlavə etmişdi, amma o vaxtdan reliz yığılmamışdı — ona görə indi üzə çıxdı.
+          #
+          # APPLE DEVELOPER SERTİFİKATI ALINANDA: aşağıdakı sətirləri geri qaytar VƏ
+          # eyni adlı secret-ləri repoya əlavə et (boş secret ilə işə salma — yenə partlayar).
+          #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY
+          #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+          # Hazırda Mac build-i İMZASIZDIR — ilk açılışda Gatekeeper xəbərdarlığı verir
+          # (sağ klik → "Aç" ilə keçilir). v0.3.0 da imzasız idi, davranış dəyişmir.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Olko ERP ${{ github.ref_name }}'
