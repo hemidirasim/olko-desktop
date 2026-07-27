@@ -49,66 +49,32 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # ⚠️ 2026-07-27: BU ADDIM YALNIZ BİR DƏFƏ OLMALIDIR.
+      # Əvvəl fayl səhvən dublikatlanmışdı: bir "Build Tauri" APPLE_* env-i ilə amma
+      # tagName/args OLMADAN işləyirdi (imzalayır, notarizasiya edir, sonra
+      # "skipping all uploads"), digəri isə tagName/args ilə amma APPLE_* OLMADAN
+      # (imzasız yığır və MƏHZ ONU relizə yükləyir). Nəticə: jurnalda "Notarizing…
+      # Accepted" görünürdü, amma yüklənən DMG ad-hoc imzalı çıxırdı.
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ✅ 2026-07-27: avtomatik yeniləmə imzası. Bu dəyişənlər olmadan
-          # `latest.json` və imzalı artefaktlar YARADILMIR → updater işləməz.
+          # Avtomatik yeniləmə imzası — bunlar olmadan `latest.json` və `.sig`
+          # artefaktları yaradılmır, updater işləməz.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # ✅ 2026-07-27 (axşam): Apple Developer ID sertifikatı alındı → macOS imza BƏRPA.
-          # Sertifikat: "Developer ID Application: Midiya Agency, MMC (CAD4QCJH2Q)"
+          # macOS kod imzası — "Developer ID Application: Midiya Agency, MMC (CAD4QCJH2Q)"
           # ⚠️ QAYDA: bu dəyişənlər YALNIZ secret-lər REAL dəyərlə doldurulanda saxlanmalıdır.
           # Boş secret → GitHub env-i boş sətir kimi verir → tauri-action `security import`
-          # çağırır → "failed to import keychain certificate" (v0.4.0-da bu baş verdi).
+          # çağırır → "failed to import keychain certificate" (v0.4.0-da baş verdi).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # Notarizasiya (Apple serverində təsdiq) — app-specific password ilə
+          # Notarizasiya (Apple serverində təsdiq) — app-specific password ilə.
+          # APPLE_ID hesabın GİRİŞ e-poçtudur (support@midiya.az), gmail deyil.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          node-version: 20
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install frontend deps
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Tauri
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ✅ 2026-07-27: avtomatik yeniləmə imzası. Bu dəyişənlər olmadan
-          # `latest.json` və imzalı artefaktlar YARADILMIR → updater işləməz.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # ⚠️ 2026-07-27: macOS imza dəyişənləri MÜVƏQQƏTİ ÇIXARILDI.
-          # Səbəb (v0.4.0 relizində təsdiq olundu): APPLE_* secret-ləri mövcud olmasa da
-          # GitHub onları BOŞ SƏTİR kimi təyin edir; tauri-action isə dəyişən "var" sayıb
-          # `security import` çağırır → "failed to import keychain certificate" ilə hər iki
-          # Mac build-i partlayır (Windows normal keçir). Əvvəlki 2026-07-21 kommiti bu bloku
-          # əlavə etmişdi, amma o vaxtdan reliz yığılmamışdı — ona görə indi üzə çıxdı.
-          #
-          # APPLE DEVELOPER SERTİFİKATI ALINANDA: aşağıdakı sətirləri geri qaytar VƏ
-          # eyni adlı secret-ləri repoya əlavə et (boş secret ilə işə salma — yenə partlayar).
-          #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY
-          #   APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
-          # Hazırda Mac build-i İMZASIZDIR — ilk açılışda Gatekeeper xəbərdarlığı verir
-          # (sağ klik → "Aç" ilə keçilir). v0.3.0 da imzasız idi, davranış dəyişmir.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Olko ERP ${{ github.ref_name }}'
