@@ -4,7 +4,7 @@ import UpdateGate, { UPDATE_ERR_KEY } from './UpdateGate'
 import './index.css'
 import {
   addWorkspace, loadWorkspaces, newId, normalizeSite, saveWorkspaces,
-  workspaceUrl, type Workspace, type WorkspaceKind,
+  resolveSiteHost, workspaceUrl, type Workspace, type WorkspaceKind,
 } from './workspaces'
 import { isolationSupported, openWorkspaceWindow } from './openWorkspace'
 
@@ -40,12 +40,35 @@ function App() {
   const [newKind, setNewKind] = useState<WorkspaceKind | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [updateError, setUpdateError] = useState('')
+  const [resolving, setResolving] = useState(false)
+  /** «Açılacaq: …» sətri üçün HƏQİQİ ünvan (təxmin yox). */
+  const [previewHost, setPreviewHost] = useState('')
 
   useEffect(() => {
     // 🔴 Faza 1.0: AVTOMATİK KEÇİD YOXDUR. Əvvəl saxlanmış sayt varsa app
     // birbaşa ora keçirdi; istifadəçi isə açılışda seçim istədi. Köhnə yaddaş
     // `loadWorkspaces()` içində iş sahəsinə çevrilir — heç nə itmir.
-    setWorkspaces(loadWorkspaces())
+    const loaded = loadWorkspaces()
+    setWorkspaces(loaded)
+    // 🔴 0.5.0-da əlavə edilmiş iş sahələri TƏXMİNLƏ qurulmuşdu və köhnə
+    //    serverə düşə bilər. Açılışda səssizcə kanonik ünvana uyğunlaşdırırıq.
+    //    Yalnız reyestr TƏSDİQ edəndə (`canonical`) dəyişirik — şəbəkə
+    //    problemində istifadəçinin öz yazdığı ünvan əzilməsin.
+    void (async () => {
+      let changed = false
+      const next = await Promise.all(loaded.map(async (w) => {
+        const r = await resolveSiteHost(w.site)
+        if (r.canonical && r.host && r.host !== w.site) {
+          changed = true
+          return { ...w, site: r.host }
+        }
+        return w
+      }))
+      if (changed) {
+        setWorkspaces(next)
+        saveWorkspaces(next)
+      }
+    })()
     // Son uğursuz yeniləmə yoxlanışının səbəbi (varsa) — launcher-də göstərilir
     try {
       const raw = localStorage.getItem(UPDATE_ERR_KEY)
@@ -62,11 +85,21 @@ function App() {
    * 🔴 Mobil: çoxpəncərəlilik yoxdur → eyni ekranda keçid (mövcud davranış).
    *    Masaüstü: öz pəncərəsində (istifadəçi qərarı), sessiyası izolə.
    */
-  const openWorkspace = async (w: Workspace) => {
+  /**
+   * 🔴 `list` PARAMETRİ MƏCBURİDİR — köhnəlmiş closure buqu (brauzerdə tutuldu).
+   *
+   * Əvvəl bu funksiya birbaşa `workspaces` state-ini oxuyurdu. `handleAdd`
+   * yeni siyahını yadda saxlayıb DƏRHAL `openWorkspace(w)` çağırırdı, amma
+   * həmin render-də `workspaces` HƏLƏ KÖHNƏ (boş) idi → `updated = []` →
+   * `saveWorkspaces([])` yenicə yazılanı SİLİRDİ. Nəticə: istifadəçi ilk iş
+   * sahəsini əlavə edir, o dərhal yox olur. (v0.5.0-a bu halda çıxıb.)
+   */
+  const openWorkspace = async (w: Workspace, list?: Workspace[]) => {
     setError('')
     setBusyId(w.id)
     // Son açılış vaxtı — launcher-də sıralama üçün
-    const updated = workspaces.map(x => x.id === w.id ? { ...x, lastOpenedAt: Date.now() } : x)
+    const base = list ?? workspaces
+    const updated = base.map(x => x.id === w.id ? { ...x, lastOpenedAt: Date.now() } : x)
     setWorkspaces(updated)
     saveWorkspaces(updated)
 
@@ -79,10 +112,9 @@ function App() {
     if (!r.ok) setError(r.error || 'Pəncərə açılmadı')
   }
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     setError('')
-    const site = normalizeSite(siteUrl)
-    if (!site) {
+    if (!normalizeSite(siteUrl)) {
       setError('Biznes adını daxil edin')
       return
     }
@@ -90,6 +122,12 @@ function App() {
       setError('Əvvəlcə tərəfi seçin')
       return
     }
+    // 🔴 Ünvanı TƏXMİN ETMİRİK — master reyestrindən soruşuruq (bax
+    //    workspaces.resolveSiteHost). Şəbəkə yoxdursa təxminə düşür.
+    setResolving(true)
+    const { host } = await resolveSiteHost(siteUrl)
+    setResolving(false)
+    const site = host || normalizeSite(siteUrl)
     const w: Workspace = { id: newId(), kind: newKind, site, createdAt: Date.now() }
     const next = addWorkspace(workspaces, w)
     if (next === workspaces) {
@@ -102,8 +140,25 @@ function App() {
     setWorkspaces(next)
     saveWorkspaces(next)
     setSiteUrl(''); setNewKind(null); setScreen('launcher')
-    void openWorkspace(w)
+    // 🔴 Yeni siyahı AÇIQ ötürülür — state hələ köhnədir (yuxarıdakı izaha bax)
+    void openWorkspace(w, next)
   }
+
+  // 🔴 «Açılacaq» sətri TƏXMİN göstərməməlidir: brauzer testində «admedia»
+  //    yazanda ekranda `admedia.olkoerp.com` yazılırdı, proqram isə
+  //    `control.admedia.az` açırdı — istifadəçiyə yalan məlumat.
+  useEffect(() => {
+    if (screen !== 'add' || !newKind || !siteUrl.trim()) {
+      setPreviewHost('')
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      const r = await resolveSiteHost(siteUrl)
+      if (!cancelled) setPreviewHost(r.host)
+    }, 450)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [siteUrl, newKind, screen])
 
   const removeWorkspace = (id: string) => {
     const next = workspaces.filter(x => x.id !== id)
@@ -118,7 +173,7 @@ function App() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleAdd()
+    if (e.key === 'Enter') void handleAdd()
   }
 
   // ✅ Tray menyusundan "Saytı dəyiş / Çıxış" → sessiyanı təmizlə, giriş ekranına qayıt
@@ -267,7 +322,7 @@ function App() {
                   {siteUrl.trim() && (
                     <p style={styles.note}>
                       Açılacaq: {workspaceUrl({
-                        id: '', kind: newKind, site: normalizeSite(siteUrl), createdAt: 0,
+                        id: '', kind: newKind, site: previewHost || normalizeSite(siteUrl), createdAt: 0,
                       })}
                     </p>
                   )}
@@ -279,10 +334,10 @@ function App() {
               <button
                 style={{ ...styles.button, opacity: newKind ? 1 : 0.5,
                          cursor: newKind ? 'pointer' : 'not-allowed' }}
-                onClick={handleAdd}
-                disabled={!newKind}
+                onClick={() => void handleAdd()}
+                disabled={!newKind || resolving}
               >
-                Əlavə et və aç
+                {resolving ? 'Yoxlanılır…' : 'Əlavə et və aç'}
               </button>
               <button
                 style={styles.linkBtn}

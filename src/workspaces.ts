@@ -62,6 +62,52 @@ export function normalizeSite(raw: string): string {
   return s
 }
 
+/**
+ * 🔴 TƏXMİN ETMƏ — SORUŞ (Faza 45.40).
+ *
+ * `normalizeSite` «admedia» → `admedia.olkoerp.com` təxmini qurur. Canlıda
+ * ölçüldü ki, bu təxmin İSTİFADƏÇİNİ SƏHV BAZAYA aparır:
+ *     admedia.olkoerp.com → köhnə server (159), tenantın tərk edilmiş
+ *                           nüsxəsi — 29 müştəri
+ *     control.admedia.az  → əsl baza (167) — 76 müştəri
+ * Hər iki ünvan HTTP 200 verir, yəni səhv sükutla baş verir.
+ *
+ * Master reyestri (`ME Tenant.custom_domain`) doğru cavabı bilir — ondan
+ * soruşuruq. Şəbəkə yoxdursa təxminə düşürük (proqram oflayn da açılmalıdır).
+ */
+const HOST_RESOLVER =
+  'https://olkoerp.com/api/method/mini_erp.mini_erp.tenant_api.resolve_tenant_host'
+
+export interface ResolvedHost {
+  host: string
+  /** `true` — cavab master reyestrindən gəldi; `false` — yerli təxmin. */
+  canonical: boolean
+}
+
+export async function resolveSiteHost(raw: string): Promise<ResolvedHost> {
+  const guess = normalizeSite(raw)
+  if (!guess) return { host: '', canonical: false }
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 6000)
+    const res = await fetch(`${HOST_RESOLVER}?name=${encodeURIComponent(raw.trim())}`, {
+      signal: ctrl.signal,
+    })
+    clearTimeout(timer)
+    if (!res.ok) return { host: guess, canonical: false }
+    const body = await res.json()
+    const host = String(body?.message?.host || '').trim().toLowerCase()
+    // 🔴 Cavab BİZİ HANSISA ÜNVANA APARIR — formatı ciddi yoxlanır:
+    //    yalnız host (sxem, yol, port, `javascript:` yox).
+    if (!host || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+      return { host: guess, canonical: false }
+    }
+    return { host, canonical: Boolean(body?.message?.canonical) }
+  } catch {
+    return { host: guess, canonical: false }
+  }
+}
+
 /** İş sahəsinin açacağı tam ünvan. */
 export function workspaceUrl(w: Workspace): string {
   return w.kind === 'portal' ? `https://${w.site}/portal` : `https://${w.site}`
