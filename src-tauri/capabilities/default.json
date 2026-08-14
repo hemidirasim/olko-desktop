@@ -30,6 +30,7 @@
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "core:window:allow-is-minimized",
-    "core:webview:allow-get-all-webviews"
+    "core:webview:allow-get-all-webviews",
+    "core:app:allow-fetch-data-store-identifiers"
   ]
 }

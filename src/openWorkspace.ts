@@ -63,6 +63,47 @@ export function isolationFailureReason(): string {
   try { return localStorage.getItem(ISO_REASON_KEY) || '' } catch { return '' }
 }
 
+/**
+ * 🔴 UĞURDA BAYRAQ TƏMİZLƏNMƏLİDİR — öz qüsurum, canlı yaddaşda tutuldu.
+ *
+ * `olko_isolation_unsupported` bir dəfə qoyulub HEÇ VAXT silinmirdi. Nəticə:
+ * izolyasiya sonradan işləməyə başlasa belə (məs. v0.5.2-dəki UUID düzəlişi ilə)
+ * launcher əbədi olaraq «bu sistemdə sessiya paylaşılır» yazacaqdı və mən də
+ * ona baxıb «hələ də sınıqdır» deyəcəkdim. Vəziyyət ÖZÜNÜ DÜZƏLTMƏLİDİR:
+ * hər uğurlu izolyasiyalı açılışda bayraq və səbəb silinir.
+ */
+function markIsolationWorking(): void {
+  try {
+    localStorage.removeItem(ISO_KEY)
+    localStorage.removeItem(ISO_REASON_KEY)
+  } catch { /* kvota */ }
+}
+
+/**
+ * 🔴 «PƏNCƏRƏ AÇILDI» ≠ «İZOLYASİYA TƏTBİQ OLUNDU».
+ *
+ * wry mənbəyində oxudum (`wkwebview/mod.rs`): identifikator dəstəklənmirsə və
+ * ya konfiqurasiya təkrar işlədilirsə, kod SƏSSİZCƏ `defaultDataStore()`-a
+ * düşür — pəncərə yenə uğurla yaranır və `tauri://created` gəlir. Yəni
+ * hadisəyə baxıb «izolyasiya işlədi» demək TƏXMİNDİR.
+ *
+ * Tauri `fetchDataStoreIdentifiers()` verir — ƏSL siyahı. Ölçürük:
+ *   true  → bizim identifikator var, izolyasiya HƏQİQƏTƏN tətbiq olunub
+ *   false → pəncərə açılıb, amma ayrıca sessiya qabı YARANMAYIB
+ *   null  → ölçə bilmədik (API/icazə yoxdur) — heç nə iddia etmirik
+ */
+async function isolationReallyApplied(id: number[]): Promise<boolean | null> {
+  try {
+    const appApi: any = await import('@tauri-apps/api/app')
+    if (typeof appApi.fetchDataStoreIdentifiers !== 'function') return null
+    const ids: number[][] = await appApi.fetchDataStoreIdentifiers()
+    if (!Array.isArray(ids)) return null
+    return ids.some((x) => Array.isArray(x) && x.length === id.length && x.every((b, i) => b === id[i]))
+  } catch {
+    return null
+  }
+}
+
 export interface OpenResult {
   ok: boolean
   /** Tauri yoxdursa (brauzerdə dev) — sadəcə eyni tabda açılıb. */
@@ -152,7 +193,20 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
 
   // ① İzolyasiya ilə sına
   const first = await attempt(isolated)
-  if (first.ok) return first
+  if (first.ok) {
+    // 🔴 Hadisəyə güvənmirik — ÖLÇÜRÜK (yuxarıdakı izaha bax)
+    if (isMac()) {
+      const applied = await isolationReallyApplied(sessionBytes(w.id))
+      if (applied === true) markIsolationWorking()
+      else if (applied === false) {
+        markIsolationUnsupported('pəncərə açıldı, amma ayrıca sessiya qabı yaranmadı')
+      }
+      // null → ölçə bilmədik, mövcud vəziyyətə toxunmuruq
+    } else {
+      markIsolationWorking()
+    }
+    return first
+  }
   if (isAlreadyExists(first.error) && (await focusExisting())) return { ok: true }
 
   // ② Alınmadısa — izolyasiyasız aç və bunu YADDA SAXLA ki, launcher
