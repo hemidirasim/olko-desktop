@@ -98,6 +98,11 @@ async function isolationReallyApplied(id: number[]): Promise<boolean | null> {
     if (typeof appApi.fetchDataStoreIdentifiers !== 'function') return null
     const ids: number[][] = await appApi.fetchDataStoreIdentifiers()
     if (!Array.isArray(ids)) return null
+    // 🔴 BOŞ SİYAHI = «BİLİNMİR», «YOX» DEYİL (canlıda yalan-mənfi verdi:
+    // «pəncərə açıldı, amma ayrıca sessiya qabı yaranmadı»). Apple yalnız
+    // DİSKƏ YAZILMIŞ store-ları sadalayır; pəncərə yenicə açılıb, hələ heç
+    // nə yazılmayıbsa siyahı boşdur — bu, izolyasiyanın yoxluğunu SÜBUT ETMİR.
+    if (ids.length === 0) return null
     return ids.some((x) => Array.isArray(x) && x.length === id.length && x.every((b, i) => b === id[i]))
   } catch {
     return null

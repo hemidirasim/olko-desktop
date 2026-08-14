@@ -68,8 +68,17 @@ function App() {
         return w
       }))
       if (changed) {
-        setWorkspaces(next)
-        saveWorkspaces(next)
+        // 🔴 ÜSTÜNƏ YAZMA — BİRLƏŞDİR (yarış vəziyyəti, canlıda İKİNCİ dəfə
+        // itki verdi). Bu async iş açılışda tutulan `loaded` üzərində gedir
+        // və resolver sorğuları bir neçə saniyə çəkir. Həmin pəncərədə
+        // istifadəçi YENİ iş sahəsi əlavə etsə, `saveWorkspaces(next)`
+        // onu SİLİRDİ (next köhnə siyahıdan törəyib). İndi yaddaşın CARİ
+        // vəziyyəti əsasdır: yalnız tanıdığımız id-lər yenilənir, bu arada
+        // əlavə olunanlar toxunulmur, silinənlər geri qayıtmır.
+        const byId = new Map(next.map((w) => [w.id, w]))
+        const merged = loadWorkspaces().map((w) => byId.get(w.id) ?? w)
+        setWorkspaces(merged)
+        saveWorkspaces(merged)
       }
     })()
     // Son uğursuz yeniləmə yoxlanışının səbəbi (varsa) — launcher-də göstərilir
@@ -262,7 +271,16 @@ function App() {
                   versiyada macOS versiyasını user-agent-dən oxuyurdum — brauzer
                   onu `10_15_7` kimi dondurduğu üçün xəbərdarlıq HƏMİŞƏ
                   görünürdü və izolyasiya lazımsız yerə söndürülürdü. */}
-              {!IS_MOBILE && !isolationSupported() && workspaces.length > 1 && (
+              {/* 🔴 45.46: xəbərdarlıq yalnız EYNİ hostu paylaşan işçi+müştəri
+                  cütü varsa göstərilir. Portal ayrı hostdadırsa (portal.admedia.az)
+                  sessiyalar onsuz da brauzer qaydası ilə ayrıdır — köhnə ümumi
+                  xəbərdarlıq istifadəçini «hələ də qarışır» deyə çaşdırırdı. */}
+              {!IS_MOBILE && !isolationSupported() && (() => {
+                const hosts = (w: Workspace) => w.kind === 'portal' ? (w.portalSite || w.site) : w.site
+                const users = workspaces.filter(w => w.kind === 'user').map(hosts)
+                const portals = workspaces.filter(w => w.kind === 'portal').map(hosts)
+                return portals.some(p => users.includes(p))
+              })() && (
                 <p style={styles.note}>
                   Bu sistemdə iş sahələri eyni sessiyanı paylaşır — eyni
                   biznesdə ikinci tərəfə keçəndə birincidən çıxış olur.
