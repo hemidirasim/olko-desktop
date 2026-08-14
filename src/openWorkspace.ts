@@ -49,8 +49,18 @@ export function isolationSupported(): boolean {
   }
 }
 
-function markIsolationUnsupported(): void {
-  try { localStorage.setItem(ISO_KEY, '1') } catch { /* kvota */ }
+const ISO_REASON_KEY = 'olko_isolation_reason'
+
+function markIsolationUnsupported(reason?: string): void {
+  try {
+    localStorage.setItem(ISO_KEY, '1')
+    if (reason) localStorage.setItem(ISO_REASON_KEY, String(reason).slice(0, 200))
+  } catch { /* kvota */ }
+}
+
+/** İzolyasiyanın niyə alınmadığı — launcher-də göstərilir (təxmin yox, fakt). */
+export function isolationFailureReason(): string {
+  try { return localStorage.getItem(ISO_REASON_KEY) || '' } catch { return '' }
 }
 
 export interface OpenResult {
@@ -73,18 +83,36 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
     return { ok: true, fallback: true }
   }
 
-  try {
-    // Artıq açıqdırsa YENİSİNİ yaratma — önə gətir (istifadəçi qərarı).
-    const existing = await api.WebviewWindow.getByLabel(label)
-    if (existing) {
-      await existing.show()
-      await existing.unminimize().catch(() => {})
-      await existing.setFocus()
-      return { ok: true }
+  /**
+   * 🔴 ÖNƏ GƏTİRMƏ HƏR ADDIMI AYRICA QORUNUR (canlıda tutuldu).
+   *
+   * Əvvəl bütün blok TƏK try/catch içində idi: `existing.show()` icazə
+   * çatışmazlığından partlayanda (capability-də `core:window:allow-show`
+   * yox idi) kod «pəncərə tapılmadı» kimi davranıb YENİSİNİ yaratmağa
+   * keçirdi və istifadəçi bu xətanı görürdü:
+   *     «a webview with label `ws-…` already exists»
+   * İndi hər çağırış ayrıca udulur — biri alınmasa da qalanları işləyir və
+   * pəncərə TAPILIBSA yenisi YARADILMIR.
+   */
+  const focusExisting = async (): Promise<boolean> => {
+    let win: any = null
+    try {
+      win = await api.WebviewWindow.getByLabel(label)
+    } catch { /* icazə/dəstək yoxdur */ }
+    if (!win) {
+      try {
+        const all = await (api as any).getAllWebviewWindows?.()
+        win = all?.find((w: any) => w?.label === label) ?? null
+      } catch { /* siyahı alınmadı */ }
     }
-  } catch {
-    /* getByLabel dəstəklənmirsə yaratmağa keç */
+    if (!win) return false
+    try { await win.show() } catch { /* icazə yoxdursa da davam et */ }
+    try { await win.unminimize() } catch { /* minimizə deyil */ }
+    try { await win.setFocus() } catch { /* fokus alınmadı */ }
+    return true
   }
+
+  if (await focusExisting()) return { ok: true }
 
   const base: Record<string, unknown> = {
     url,
@@ -119,13 +147,22 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
       }
     })
 
+  /** Pəncərə ARTIQ VAR xətası — yaratmaq yox, önə gətirmək lazımdır. */
+  const isAlreadyExists = (msg?: string) => /already exists/i.test(msg || '')
+
   // ① İzolyasiya ilə sına
   const first = await attempt(isolated)
   if (first.ok) return first
+  if (isAlreadyExists(first.error) && (await focusExisting())) return { ok: true }
 
-  // ② Platforma dəstəkləmirsə — izolyasiyasız aç və bunu YADDA SAXLA ki,
-  //    launcher istifadəçiyə dürüst xəbərdarlıq göstərsin (səssiz deqradasiya yox).
-  markIsolationUnsupported()
+  // ② Alınmadısa — izolyasiyasız aç və bunu YADDA SAXLA ki, launcher
+  //    istifadəçiyə dürüst xəbərdarlıq göstərsin (səssiz deqradasiya yox).
+  //    🔴 SƏBƏBİ də saxlayırıq: «işləmir» yox, «BU SƏBƏBDƏN işləmir».
+  //    İlk yazılışda yalnız bayraq qoyurdum və nə baş verdiyini bilmək
+  //    mümkün deyildi.
+  markIsolationUnsupported(first.error)
   const second = await attempt(base)
-  return second.ok ? second : first
+  if (second.ok) return second
+  if (isAlreadyExists(second.error) && (await focusExisting())) return { ok: true }
+  return second.error ? second : first
 }

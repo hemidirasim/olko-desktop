@@ -6,7 +6,7 @@ import {
   addWorkspace, loadWorkspaces, newId, normalizeSite, saveWorkspaces,
   resolveSiteHost, workspaceUrl, type Workspace, type WorkspaceKind,
 } from './workspaces'
-import { isolationSupported, openWorkspaceWindow } from './openWorkspace'
+import { isolationFailureReason, isolationSupported, openWorkspaceWindow } from './openWorkspace'
 
 /**
  * 🔴 Faza 1.0 (2026-08-14) — İŞ SAHƏSİ (workspace) modeli.
@@ -259,6 +259,9 @@ function App() {
                 <p style={styles.note}>
                   Bu sistemdə iş sahələri eyni sessiyanı paylaşır — eyni
                   biznesdə ikinci tərəfə keçəndə birincidən çıxış olur.
+                  {isolationFailureReason() && (
+                    <><br /><span style={{ opacity: 0.75 }}>Səbəb: {isolationFailureReason()}</span></>
+                  )}
                 </p>
               )}
             </div>

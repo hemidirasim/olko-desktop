@@ -139,6 +139,14 @@ export function sessionBytes(id: string): number[] {
   //    çıxarır və `out`-u `0[]`-ə daraldır → sonrakı mənimsətmə kompilyasiya
   //    xətası verir. `some(... !== 0)` bu tələdən keçir.
   if (!out.some((b) => b !== 0)) out[0] = 1
+
+  // 🔴 RFC-4122 v4 formatı: Apple `WKWebsiteDataStore(forIdentifier:)`
+  //    NSUUID gözləyir. Sırf təsadüfi baytlar formal olaraq etibarlı UUID
+  //    sayılmaya bilər — versiya/variant bitlərini qoymaq ucuz sığortadır.
+  //    (macOS-da izolyasiyanın nə üçün alınmadığı hələ təsdiqlənməyib;
+  //    əsl səbəb artıq `olko_isolation_reason`-a yazılır.)
+  out[6] = (out[6] & 0x0f) | 0x40   // versiya 4
+  out[8] = (out[8] & 0x3f) | 0x80   // variant 10xx
   return out
 }
 
