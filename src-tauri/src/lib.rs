@@ -250,7 +250,10 @@ pub fn run() {
                 // əməliyyatları buradan əlçatandır (sağ klik → menyu).
                 {
                     use tauri::menu::{MenuBuilder, MenuItemBuilder};
-                    let reset = MenuItemBuilder::with_id("reset_site", "Saytı dəyiş / Çıxış").build(app)?;
+                    // 🔴 Faza 1.0: app artıq tək sayta bağlı deyil — iş sahələri
+                    //    (workspace) siyahısı var. Etiket «Saytı dəyiş» yanıldıcı
+                    //    olardı: bu düymə heç nə silmir, sadəcə LAUNCHER-i qaytarır.
+                    let reset = MenuItemBuilder::with_id("reset_site", "İş sahələri").build(app)?;
                     let quit = MenuItemBuilder::with_id("quit_app", "Proqramdan çıx").build(app)?;
                     let menu = MenuBuilder::new(app).items(&[&reset, &quit]).build()?;
                     if let Some(tray) = app.tray_by_id("main-tray") {

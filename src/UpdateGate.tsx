@@ -13,6 +13,9 @@
  */
 import { useEffect, useState } from 'react'
 
+/** Son uğursuz yeniləmə yoxlanışı — launcher onu göstərir (2026-08-14). */
+export const UPDATE_ERR_KEY = 'olko_update_error'
+
 type Phase = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'error'
 
 interface Props {
@@ -46,11 +49,29 @@ export default function UpdateGate({ onDone }: Props) {
           setVersion(found.version || '')
           setNotes(found.body || '')
           setPhase('available')
+          // Uğurlu yoxlama — köhnə xəta qeydi qalmasın
+          try { localStorage.removeItem(UPDATE_ERR_KEY) } catch { /* kvota */ }
         } else {
+          try { localStorage.removeItem(UPDATE_ERR_KEY) } catch { /* kvota */ }
           onDone()
         }
-      } catch {
-        // İnternet yoxdur / GitHub əlçatmaz / brauzerdə işləyir → sakitcə davam et
+      } catch (e) {
+        /**
+         * 🔴 2026-08-14: ƏVVƏL BU BLOK TAMAMİLƏ SƏSSİZ İDİ (`catch { onDone() }`).
+         *
+         * İstifadəçi «Windows-da yenilənmə getmədi» dedi və səbəbi tapmaq mümkün
+         * olmadı: nə log, nə ekranda mesaj — app sadəcə davam edirdi. Yəni şəbəkə
+         * xətası, imza uyğunsuzluğu, `TargetNotFound` və «yeni versiya yoxdur»
+         * halları İSTİFADƏÇİ ÜÇÜN EYNİ görünürdü.
+         *
+         * İndi səbəb yazılır və launcher-də göstərilir. Axın DƏYİŞMİR — yoxlama
+         * uğursuz olsa da proqram açılır (yeniləmə app-ı bloklamamalıdır).
+         */
+        const msg = e instanceof Error ? e.message : String(e)
+        try {
+          localStorage.setItem(UPDATE_ERR_KEY, JSON.stringify({ msg, at: Date.now() }))
+        } catch { /* kvota */ }
+        console.error('[olko] yeniləmə yoxlanışı alınmadı:', msg)
         if (alive) onDone()
       }
     })()

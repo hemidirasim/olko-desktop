@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "Olko ERP desktop permissions",
   "windows": [
-    "main"
+    "main",
+    "ws-*"
   ],
   "remote": {
     "urls": [
@@ -21,6 +22,10 @@
     "allow-native-test",
     "allow-native-print",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-webview-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-close"
   ]
 }

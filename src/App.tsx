@@ -1,9 +1,28 @@
 import { useState, useEffect } from 'react'
 import olkoLogo from './assets/olko-logo.png'
-import UpdateGate from './UpdateGate'
+import UpdateGate, { UPDATE_ERR_KEY } from './UpdateGate'
 import './index.css'
+import {
+  addWorkspace, loadWorkspaces, newId, normalizeSite, saveWorkspaces,
+  workspaceUrl, type Workspace, type WorkspaceKind,
+} from './workspaces'
+import { isolationSupported, openWorkspaceWindow } from './openWorkspace'
 
-type Screen = 'login' | 'app'
+/**
+ * 🔴 Faza 1.0 (2026-08-14) — İŞ SAHƏSİ (workspace) modeli.
+ *
+ * İSTİFADƏÇİ: «proqramı açanda soruşulsun müştəri yoxsa istifadəçi… workspace
+ * məntiqi ilə açılsın, hansına keçid etmək istəyirsə ona keçid etsin… həm
+ * istifadəçi həm portal üçün müxtəlif pəncərələr açmaq olsun».
+ *
+ * ƏVVƏL: app tək sayt saxlayırdı (`olko_last_site`) və açılışda BİRBAŞA ora
+ * keçirdi. İNDİ: açılışda LAUNCHER görünür, hər iş sahəsi öz pəncərəsində açılır.
+ *
+ * 🔴 Avtomatik keçid QƏSDƏN SİLİNDİ — istifadəçi məhz «açanda soruşulsun»
+ * dedi. Köhnə tək-sayt yaddaşı isə itmir: `loadWorkspaces()` onu ilk açılışda
+ * iş sahəsinə çevirir (miqrasiya).
+ */
+type Screen = 'launcher' | 'add'
 
 // ✅ 2026-07-17 Android dəstəyi: mobil-də pəncərə API-ləri (resize/hide/drag) yoxdur —
 // tam-ekran rejim, bubble/collapse yalnız desktop-da
@@ -13,74 +32,93 @@ function App() {
   // ✅ 2026-07-27: proqram açılanda ƏVVƏL yeniləmə yoxlanır (uzaq domenə keçəndən sonra
   // Tauri plagin API-ləri əlçatan olmur → yoxlama məhz burada aparılmalıdır).
   const [updateChecked, setUpdateChecked] = useState(false)
-  const [screen, setScreen] = useState<Screen>('login')
+  const [screen, setScreen] = useState<Screen>('launcher')
   const [siteUrl, setSiteUrl] = useState('')
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  /** «Yeni iş sahəsi» axını: əvvəl TƏRƏF, sonra biznes adı. */
+  const [newKind, setNewKind] = useState<WorkspaceKind | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [updateError, setUpdateError] = useState('')
 
   useEffect(() => {
-    // ✅ 2026-07-27: hər iki platformada EYNİ məntiq — app yalnız sayt seçicisidir.
-    // Tray menyusundan "Saytı dəyiş" seçiləndə Rust bizi `?setup=1` ilə geri gətirir;
-    // o halda avtomatik keçid ETMİRİK, seçim ekranını göstəririk.
-    const wantsSetup = new URLSearchParams(window.location.search).has('setup')
-    const lastSite = localStorage.getItem('olko_last_site')
-
-    if (wantsSetup) {
-      localStorage.removeItem('olko_last_site')
-      if (lastSite) setSiteUrl(lastSite.replace(/^https?:\/\//, '').replace(/\.olkoerp\.com$/, ''))
-      return
-    }
-    if (lastSite) {
-      // Saxlanmış sayt var → birbaşa ERP-yə keç (ERP öz login-ini göstərəcək,
-      // sessiya varsa heç nə soruşmayacaq — brauzerdəki kimi).
-      setLoading(true)
-      window.location.replace(lastSite)
-      return
-    }
+    // 🔴 Faza 1.0: AVTOMATİK KEÇİD YOXDUR. Əvvəl saxlanmış sayt varsa app
+    // birbaşa ora keçirdi; istifadəçi isə açılışda seçim istədi. Köhnə yaddaş
+    // `loadWorkspaces()` içində iş sahəsinə çevrilir — heç nə itmir.
+    setWorkspaces(loadWorkspaces())
+    // Son uğursuz yeniləmə yoxlanışının səbəbi (varsa) — launcher-də göstərilir
+    try {
+      const raw = localStorage.getItem(UPDATE_ERR_KEY)
+      if (raw) setUpdateError(String(JSON.parse(raw).msg || '').slice(0, 160))
+    } catch { /* pozulmuş qeyd — əhəmiyyətsiz */ }
   }, [])
 
   // ✅ 2026-07-27: pəncərə ölçüsünü ZORLA təyin edən effekt SİLİNDİ.
   // Əvvəl hər renderdə 424×644-ə (bubble) salınırdı — istifadəçi böyüdə bilmirdi.
   // İndi ölçü/mövqe OS-in və istifadəçinin nəzarətindədir (adi masaüstü proqramı kimi).
 
-  const normalizeSiteUrl = (raw: string): string => {
-    // ✅ 2026-07-18: istifadəçi biznes adını yazır (məs. "qurman") — nöqtəsiz gələn dəyər
-    // avtomatik `{ad}.olkoerp.com`-a çevrilir. Nöqtəli (tam domen, məs. custom domain
-    // "erp.admedia.az" və ya "qurman.olkoerp.com") olduğu kimi qəbul olunur.
-    let s = raw.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
-    if (s && !s.includes('.')) s = `${s}.olkoerp.com`
-    return `https://${s}`
+  /**
+   * İş sahəsini aç.
+   * 🔴 Mobil: çoxpəncərəlilik yoxdur → eyni ekranda keçid (mövcud davranış).
+   *    Masaüstü: öz pəncərəsində (istifadəçi qərarı), sessiyası izolə.
+   */
+  const openWorkspace = async (w: Workspace) => {
+    setError('')
+    setBusyId(w.id)
+    // Son açılış vaxtı — launcher-də sıralama üçün
+    const updated = workspaces.map(x => x.id === w.id ? { ...x, lastOpenedAt: Date.now() } : x)
+    setWorkspaces(updated)
+    saveWorkspaces(updated)
+
+    if (IS_MOBILE) {
+      window.location.replace(workspaceUrl(w))
+      return
+    }
+    const r = await openWorkspaceWindow(w)
+    setBusyId(null)
+    if (!r.ok) setError(r.error || 'Pəncərə açılmadı')
   }
 
-  const handleLogin = () => {
+  const handleAdd = () => {
     setError('')
-    // ✅ 2026-07-27: MASAÜSTÜ də mobil ilə EYNİ modelə keçdi — app yalnız SAYT SEÇİCİSİDİR.
-    //
-    // Əvvəl masaüstündə app `fetch` ilə login edib ERP-ni IFRAME-də açırdı. İframe
-    // cross-site olduğu üçün brauzer üçüncü-tərəf cookie-ni bloklayır → ERP sessiyanı
-    // tanımır və ÖZ login səhifəsini yenidən göstərirdi (istifadəçi iki dəfə şifrə yazırdı).
-    // Mobil bu problemi 2026-07-18-də top-level naviqasiya ilə həll etmişdi; indi masaüstü
-    // də eynidir: yalnız biznes adı soruşulur, autentifikasiyanı ERP-nin öz first-party
-    // login-i idarə edir → TƏK giriş.
-    if (!siteUrl.trim()) {
+    const site = normalizeSite(siteUrl)
+    if (!site) {
       setError('Biznes adını daxil edin')
       return
     }
-    const base = normalizeSiteUrl(siteUrl)
-    localStorage.setItem('olko_last_site', base)
-    setLoading(true)
-    // replace() — giriş ekranı tarixçədən çıxır (geri düyməsi ora qayıtmasın)
-    window.location.replace(base)
+    if (!newKind) {
+      setError('Əvvəlcə tərəfi seçin')
+      return
+    }
+    const w: Workspace = { id: newId(), kind: newKind, site, createdAt: Date.now() }
+    const next = addWorkspace(workspaces, w)
+    if (next === workspaces) {
+      // Eyni (sayt + tərəf) artıq var — yenisini yaratmaq əvəzinə onu aç
+      const dup = workspaces.find(x => x.site === w.site && x.kind === w.kind)!
+      setScreen('launcher'); setSiteUrl(''); setNewKind(null)
+      void openWorkspace(dup)
+      return
+    }
+    setWorkspaces(next)
+    saveWorkspaces(next)
+    setSiteUrl(''); setNewKind(null); setScreen('launcher')
+    void openWorkspace(w)
+  }
+
+  const removeWorkspace = (id: string) => {
+    const next = workspaces.filter(x => x.id !== id)
+    setWorkspaces(next)
+    saveWorkspaces(next)
   }
 
   const handleLogout = () => {
-    // Tray "Saytı dəyiş / Çıxış" → saxlanmış saytı unut, seçim ekranına qayıt
-    localStorage.removeItem('olko_last_site')
-    setScreen('login')
+    // Tray «Saytı dəyiş / Çıxış» → launcher-ə qayıt (iş sahələri SİLİNMİR —
+    // onlar istifadəçinin qurduğu siyahıdır, sessiya deyil).
+    setScreen('launcher')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleLogin()
+    if (e.key === 'Enter') handleAdd()
   }
 
   // ✅ Tray menyusundan "Saytı dəyiş / Çıxış" → sessiyanı təmizlə, giriş ekranına qayıt
@@ -99,50 +137,158 @@ function App() {
   // Yeniləmə qapısı — yoxlama bitənə (və ya istifadəçi "Sonra" seçənə) qədər
   if (!updateChecked) return <UpdateGate onDone={() => setUpdateChecked(true)} />
 
-  // Login screen
-  if (screen === 'login') {
+  // ══════════ LAUNCHER — açılış ekranı ══════════
+  if (screen === 'launcher') {
+    const sorted = [...workspaces].sort(
+      (a, b) => (b.lastOpenedAt || b.createdAt) - (a.lastOpenedAt || a.createdAt))
+    return (
+      <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
+        <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}), maxWidth: 560 }}>
+          <div style={styles.loginContent}>
+            <div style={styles.logoSection}>
+              <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
+              <h1 style={styles.logoText}>Olko ERP</h1>
+              <p style={styles.subtitle}>
+                {sorted.length ? 'İş sahəsi seçin' : 'İlk iş sahənizi əlavə edin'}
+              </p>
+            </div>
+
+            <div style={styles.form}>
+              {sorted.map(w => (
+                <div key={w.id} style={styles.wsRow}>
+                  <button
+                    style={{ ...styles.wsCard, opacity: busyId === w.id ? 0.6 : 1 }}
+                    onClick={() => void openWorkspace(w)}
+                    disabled={busyId === w.id}
+                  >
+                    <span style={{
+                      ...styles.wsBadge,
+                      background: w.kind === 'portal' ? '#0f766e' : '#4f46e5',
+                    }}>
+                      {w.kind === 'portal' ? 'Müştəri' : 'İstifadəçi'}
+                    </span>
+                    <span style={styles.wsSite}>{w.label || w.site}</span>
+                    {busyId === w.id && <span style={styles.wsHint}>açılır…</span>}
+                  </button>
+                  <button
+                    style={styles.wsRemove}
+                    title="Siyahıdan sil"
+                    onClick={() => removeWorkspace(w.id)}
+                  >×</button>
+                </div>
+              ))}
+
+              {error && <div style={styles.error}>{error}</div>}
+
+              <button style={styles.button} onClick={() => { setError(''); setScreen('add') }}>
+                + Yeni iş sahəsi
+              </button>
+
+              {/* 🔴 2026-08-14: yeniləmə yoxlanışı uğursuz olubsa SƏBƏBİ göstər.
+                  İstifadəçi «Windows-da yenilənmə getmədi» dedi və heç bir iz
+                  yox idi — `UpdateGate` xətanı səssizcə udurdu. İndi son xəta
+                  burada görünür ki, növbəti dəfə təxmin yox, FAKT olsun. */}
+              {updateError && (
+                <p style={{ ...styles.note, color: '#b45309' }}>
+                  Yeniləmə yoxlanışı alınmadı: {updateError}
+                </p>
+              )}
+
+              {/* 🔴 Xəbərdarlıq TƏXMİNƏ görə yox, SINAQ NƏTİCƏSİNƏ görə çıxır:
+                  `openWorkspace.ts` izolyasiyalı açmağı bir dəfə sınayır və
+                  platforma dəstəkləmirsə bunu yadda saxlayır. Əvvəlki
+                  versiyada macOS versiyasını user-agent-dən oxuyurdum — brauzer
+                  onu `10_15_7` kimi dondurduğu üçün xəbərdarlıq HƏMİŞƏ
+                  görünürdü və izolyasiya lazımsız yerə söndürülürdü. */}
+              {!IS_MOBILE && !isolationSupported() && workspaces.length > 1 && (
+                <p style={styles.note}>
+                  Bu sistemdə iş sahələri eyni sessiyanı paylaşır — eyni
+                  biznesdə ikinci tərəfə keçəndə birincidən çıxış olur.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ══════════ YENİ İŞ SAHƏSİ — əvvəl TƏRƏF, sonra biznes ══════════
+  if (screen === 'add') {
     return (
       <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
         <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
           <div style={styles.loginContent}>
             <div style={styles.logoSection}>
               <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
-              <h1 style={styles.logoText}>Olko ERP</h1>
+              <h1 style={styles.logoText}>Yeni iş sahəsi</h1>
               <p style={styles.subtitle}>
-                Biznes adınızı daxil edin
+                {newKind ? 'Biznes adını daxil edin' : 'Hansı tərəfdən daxil olursunuz?'}
               </p>
             </div>
 
             <div style={styles.form}>
-              <div style={styles.field}>
-                <label style={styles.label}>Biznes adı</label>
-                <input
-                  style={styles.input}
-                  type="text"
-                  placeholder="biznesiniz"
-                  value={siteUrl}
-                  onChange={e => setSiteUrl(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                />
+              {/* Addım 1 — tərəf */}
+              <div style={styles.kindRow}>
+                {(['user', 'portal'] as WorkspaceKind[]).map(k => (
+                  <button
+                    key={k}
+                    style={{
+                      ...styles.kindBtn,
+                      ...(newKind === k ? styles.kindBtnActive : {}),
+                    }}
+                    onClick={() => { setError(''); setNewKind(k) }}
+                  >
+                    <span style={styles.kindTitle}>
+                      {k === 'user' ? 'İstifadəçi' : 'Müştəri'}
+                    </span>
+                    <span style={styles.kindSub}>
+                      {k === 'user' ? 'Şirkət işçisi — ERP' : 'Portal — sifariş və hesablar'}
+                    </span>
+                  </button>
+                ))}
               </div>
 
-              {/* ✅ E-poçt/şifrə sahələri SİLİNDİ — ERP-nin öz login səhifəsi
-                  first-party işlədiyi üçün burada təkrar soruşmaq lazım deyil. */}
+              {/* Addım 2 — biznes adı (yalnız tərəf seçiləndən sonra) */}
+              {newKind && (
+                <div style={styles.field}>
+                  <label style={styles.label}>Biznes adı</label>
+                  <input
+                    style={styles.input}
+                    type="text"
+                    placeholder="biznesiniz"
+                    value={siteUrl}
+                    onChange={e => setSiteUrl(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoFocus
+                  />
+                  {siteUrl.trim() && (
+                    <p style={styles.note}>
+                      Açılacaq: {workspaceUrl({
+                        id: '', kind: newKind, site: normalizeSite(siteUrl), createdAt: 0,
+                      })}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {error && <div style={styles.error}>{error}</div>}
 
               <button
-                style={{
-                  ...styles.button,
-                  opacity: loading ? 0.7 : 1,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                }}
-                onClick={handleLogin}
-                disabled={loading}
+                style={{ ...styles.button, opacity: newKind ? 1 : 0.5,
+                         cursor: newKind ? 'pointer' : 'not-allowed' }}
+                onClick={handleAdd}
+                disabled={!newKind}
               >
-                {loading ? 'Gözləyin...' : (IS_MOBILE ? 'Sistemə keç' : 'Daxil ol')}
+                Əlavə et və aç
+              </button>
+              <button
+                style={styles.linkBtn}
+                onClick={() => { setError(''); setNewKind(null); setSiteUrl(''); setScreen('launcher') }}
+              >
+                Geri
               </button>
             </div>
           </div>
@@ -307,6 +453,40 @@ const styles: Record<string, React.CSSProperties> = {
     outline: 'none',
     transition: 'border-color 0.2s',
     background: '#f8fafc',
+  },
+  // ── Faza 1.0: iş sahəsi kartları ──
+  wsRow: { display: 'flex', alignItems: 'stretch', gap: 8 },
+  wsCard: {
+    flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
+    padding: '12px 14px', borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)',
+    background: '#ffffff', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+  },
+  wsBadge: {
+    flexShrink: 0, color: '#fff', fontSize: 11, fontWeight: 700,
+    padding: '3px 8px', borderRadius: 999, letterSpacing: 0.2,
+  },
+  wsSite: {
+    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap', fontSize: 14, color: '#0f172a', fontWeight: 600,
+  },
+  wsHint: { flexShrink: 0, fontSize: 12, color: '#64748b' },
+  wsRemove: {
+    flexShrink: 0, width: 36, borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)',
+    background: '#ffffff', color: '#94a3b8', fontSize: 18, cursor: 'pointer',
+  },
+  kindRow: { display: 'flex', gap: 10 },
+  kindBtn: {
+    flex: 1, display: 'flex', flexDirection: 'column', gap: 4, padding: '14px 12px',
+    borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)', background: '#ffffff',
+    cursor: 'pointer', textAlign: 'left', font: 'inherit',
+  },
+  kindBtnActive: { borderColor: '#4f46e5', boxShadow: '0 0 0 3px rgba(79,70,229,0.12)' },
+  kindTitle: { fontSize: 14, fontWeight: 700, color: '#0f172a' },
+  kindSub: { fontSize: 11.5, color: '#64748b', lineHeight: 1.35 },
+  note: { fontSize: 11.5, color: '#64748b', margin: '6px 0 0', lineHeight: 1.4 },
+  linkBtn: {
+    background: 'none', border: 'none', color: '#64748b', fontSize: 13,
+    cursor: 'pointer', padding: 6, font: 'inherit',
   },
   error: {
     background: '#fef2f2',
