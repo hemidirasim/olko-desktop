@@ -58,9 +58,12 @@ function App() {
       let changed = false
       const next = await Promise.all(loaded.map(async (w) => {
         const r = await resolveSiteHost(w.site)
-        if (r.canonical && r.host && r.host !== w.site) {
+        if (!r.canonical) return w
+        const nextSite = r.host || w.site
+        const nextPortal = r.portalHost || nextSite
+        if (nextSite !== w.site || nextPortal !== (w.portalSite || '')) {
           changed = true
-          return { ...w, site: r.host }
+          return { ...w, site: nextSite, portalSite: nextPortal }
         }
         return w
       }))
@@ -125,10 +128,14 @@ function App() {
     // 🔴 Ünvanı TƏXMİN ETMİRİK — master reyestrindən soruşuruq (bax
     //    workspaces.resolveSiteHost). Şəbəkə yoxdursa təxminə düşür.
     setResolving(true)
-    const { host } = await resolveSiteHost(siteUrl)
+    const { host, portalHost } = await resolveSiteHost(siteUrl)
     setResolving(false)
     const site = host || normalizeSite(siteUrl)
-    const w: Workspace = { id: newId(), kind: newKind, site, createdAt: Date.now() }
+    const w: Workspace = {
+      id: newId(), kind: newKind, site,
+      portalSite: portalHost || site,
+      createdAt: Date.now(),
+    }
     const next = addWorkspace(workspaces, w)
     if (next === workspaces) {
       // Eyni (sayt + tərəf) artıq var — yenisini yaratmaq əvəzinə onu aç

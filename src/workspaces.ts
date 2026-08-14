@@ -37,6 +37,13 @@ export interface Workspace {
   kind: WorkspaceKind
   /** Tam host: «qurman.olkoerp.com» və ya custom domen «erp.admedia.az». */
   site: string
+  /**
+   * 🔴 Portal üçün AYRI host (Faza 45.44). İşçi paneli və müştəri portalı
+   * eyni ünvanda olanda sessiya cookie-si də eynidir → eyni anda ikisində
+   * qalmaq mümkün deyil. Master reyestri ayrı host verirsə onu işlədirik.
+   * Boşdursa köhnə davranış: `site` üzərində `/portal`.
+   */
+  portalSite?: string
   /** İstifadəçinin verdiyi ad (boşdursa sayt adı göstərilir). */
   label?: string
   createdAt: number
@@ -80,13 +87,15 @@ const HOST_RESOLVER =
 
 export interface ResolvedHost {
   host: string
+  /** Müştəri portalının hostu (ayrı verilməyibsə `host` ilə eyni). */
+  portalHost: string
   /** `true` — cavab master reyestrindən gəldi; `false` — yerli təxmin. */
   canonical: boolean
 }
 
 export async function resolveSiteHost(raw: string): Promise<ResolvedHost> {
   const guess = normalizeSite(raw)
-  if (!guess) return { host: '', canonical: false }
+  if (!guess) return { host: '', portalHost: '', canonical: false }
   try {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 6000)
@@ -94,23 +103,31 @@ export async function resolveSiteHost(raw: string): Promise<ResolvedHost> {
       signal: ctrl.signal,
     })
     clearTimeout(timer)
-    if (!res.ok) return { host: guess, canonical: false }
+    if (!res.ok) return { host: guess, portalHost: guess, canonical: false }
     const body = await res.json()
     const host = String(body?.message?.host || '').trim().toLowerCase()
+    const portalRaw = String(body?.message?.portal_host || '').trim().toLowerCase()
     // 🔴 Cavab BİZİ HANSISA ÜNVANA APARIR — formatı ciddi yoxlanır:
     //    yalnız host (sxem, yol, port, `javascript:` yox).
-    if (!host || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
-      return { host: guess, canonical: false }
+    const okHost = (h: string) =>
+      !!h && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(h)
+    if (!okHost(host)) return { host: guess, portalHost: guess, canonical: false }
+    return {
+      host,
+      // Portal hostu da EYNİ ciddiliklə yoxlanır — o da bizi bir ünvana aparır
+      portalHost: okHost(portalRaw) ? portalRaw : host,
+      canonical: Boolean(body?.message?.canonical),
     }
-    return { host, canonical: Boolean(body?.message?.canonical) }
   } catch {
-    return { host: guess, canonical: false }
+    return { host: guess, portalHost: guess, canonical: false }
   }
 }
 
 /** İş sahəsinin açacağı tam ünvan. */
 export function workspaceUrl(w: Workspace): string {
-  return w.kind === 'portal' ? `https://${w.site}/portal` : `https://${w.site}`
+  // Yol həmişə `/portal` qalır — ayıran şey HOST-dur (cookie hosta bağlıdır).
+  if (w.kind === 'portal') return `https://${w.portalSite || w.site}/portal`
+  return `https://${w.site}`
 }
 
 export function workspaceTitle(w: Workspace): string {
