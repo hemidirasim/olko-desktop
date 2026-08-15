@@ -28,6 +28,67 @@ type Screen = 'launcher' | 'add'
 // tam-ekran rejim, bubble/collapse yalnız desktop-da
 const IS_MOBILE = /android|iphone|ipad/i.test(navigator.userAgent)
 
+/**
+ * 🔴 KARTIN «ÜZÜ» — AnyDesk-də hər sessiyanın ekran şəkli olur və istifadəçi
+ * onları rəngə görə tanıyır. Bizdə ekran şəkli yoxdur, ona görə eyni funksiyanı
+ * BİZNES ADINDAN TÖRƏYƏN determinist rəng verir: eyni biznes həmişə eyni
+ * görünür, fərqli bizneslər fərqlənir. Təsadüfi rəng OLMAZ — hər açılışda
+ * dəyişsəydi «tanıma» faydası itərdi.
+ */
+function hashHue(sRaw: string): number {
+  let h = 0
+  for (let i = 0; i < sRaw.length; i++) h = (h * 31 + sRaw.charCodeAt(i)) % 360
+  return h
+}
+
+/**
+ * Rəng açarı: eyni biznesin İŞÇİ və MÜŞTƏRİ kartları EYNİ rəngdə olmalıdır —
+ * onları «bir biznes» kimi görmək lazımdır. Ona görə açar portal hostundan
+ * yox, biznesin qeydiyyat adından götürülür.
+ */
+function brandKey(site: string): string {
+  const parts = (site || '').toLowerCase().split('.').filter(Boolean)
+  if (site.endsWith('.olkoerp.com')) return parts[0] || site
+  return parts.length >= 2 ? parts[parts.length - 2] : site
+}
+
+function coverGradient(host: string): string {
+  const h = hashHue(host)
+  const h2 = (h + 38) % 360
+  return `linear-gradient(135deg, hsl(${h} 52% 46%), hsl(${h2} 58% 34%))`
+}
+
+/**
+ * 🔴 MƏNALI HİSSƏNİ SEÇ — sadəcə «ilk iki hərf» YETƏRLİ DEYİL.
+ * Brauzerdə göründü: `control.admedia.az` → «CO» və `cofmof.olkoerp.com` → «CO»
+ * — iki fərqli biznes eyni monoqramla çıxırdı, tanıma faydası itirdi.
+ * Qayda: olkoerp.com altdomeni isə TENANT adı (qurman→QU), custom domendirsə
+ * qeydiyyat adı (control.admedia.az → admedia → AD).
+ */
+function monogram(name: string): string {
+  const clean = (name || '').replace(/^https?:\/\//, '').split('/')[0].toLowerCase()
+  const parts = clean.split('.').filter(Boolean)
+  let word = parts[0] || clean
+  if (clean.endsWith('.olkoerp.com')) {
+    word = parts[0] || clean            // tenant adı
+  } else if (parts.length >= 2) {
+    word = parts[parts.length - 2]      // qeydiyyat adı (admedia.az → admedia)
+  }
+  return word.slice(0, 3).toUpperCase()
+}
+
+/** «Son açılış» — nisbi, qısa. Heç açılmayıbsa boş qalır (uydurma tarix yox). */
+function lastSeen(ts?: number): string {
+  if (!ts) return 'açılmayıb'
+  const diff = Date.now() - ts
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return 'indicə'
+  if (m < 60) return `${m} dəq əvvəl`
+  const hr = Math.floor(m / 60)
+  if (hr < 24) return `${hr} saat əvvəl`
+  return `${Math.floor(hr / 24)} gün əvvəl`
+}
+
 function App() {
   // ✅ 2026-07-27: proqram açılanda ƏVVƏL yeniləmə yoxlanır (uzaq domenə keçəndən sonra
   // Tauri plagin API-ləri əlçatan olmur → yoxlama məhz burada aparılmalıdır).
@@ -43,6 +104,29 @@ function App() {
   const [resolving, setResolving] = useState(false)
   /** «Açılacaq: …» sətri üçün HƏQİQİ ünvan (təxmin yox). */
   const [previewHost, setPreviewHost] = useState('')
+  /**
+   * Hazırda AÇIQ olan iş sahəsi pəncərələri (`ws-<id>` etiketləri).
+   * AnyDesk-dəki yaşıl «qoşulu» göstəricisinin qarşılığı — istifadəçi hansının
+   * artıq açıq olduğunu görsün, təkrar açmağa çalışmasın.
+   */
+  const [openLabels, setOpenLabels] = useState<string[]>([])
+
+  useEffect(() => {
+    if (IS_MOBILE) return
+    let stop = false
+    const scan = async () => {
+      try {
+        const api: any = await import('@tauri-apps/api/webviewWindow')
+        const all = await api.getAllWebviewWindows?.()
+        if (!stop && Array.isArray(all)) {
+          setOpenLabels(all.map((w: any) => String(w?.label || '')).filter(Boolean))
+        }
+      } catch { /* brauzer dev və ya icazə — göstərici sadəcə görünmür */ }
+    }
+    void scan()
+    const t = window.setInterval(scan, 4000)
+    return () => { stop = true; window.clearInterval(t) }
+  }, [])
 
   useEffect(() => {
     // 🔴 Faza 1.0: AVTOMATİK KEÇİD YOXDUR. Əvvəl saxlanmış sayt varsa app
@@ -222,90 +306,134 @@ function App() {
   // Yeniləmə qapısı — yoxlama bitənə (və ya istifadəçi "Sonra" seçənə) qədər
   if (!updateChecked) return <UpdateGate onDone={() => setUpdateChecked(true)} />
 
-  // ══════════ LAUNCHER — açılış ekranı ══════════
+  // ══════════ LAUNCHER — açılış ekranı (Faza 45.48) ══════════
+  //
+  // İSTİFADƏÇİ: «buranın da dizaynın mükəmməl et. anydesk tərzi nəsə».
+  //
+  // AnyDesk-dən götürülən İDEYA: iş sahəsi SƏTİR deyil, ÜZ-ü olan KARTdır —
+  // hər biri öz görünüşü ilə tanınır (AnyDesk-də ekran şəkli, bizdə bizneslə
+  // determinist rəng + monoqram), altda ünvan zolağı, üstündə vəziyyət nöqtəsi.
+  // Kopyalamadığımız: AnyDesk-in qırmızı vurğusu və «Your Address» blokunun
+  // ağırlığı — Olko-nun palitrası (indiqo=işçi, firuzəyi=müştəri) saxlanılır.
   if (screen === 'launcher') {
     const sorted = [...workspaces].sort(
       (a, b) => (b.lastOpenedAt || b.createdAt) - (a.lastOpenedAt || a.createdAt))
+
     return (
-      <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
-        <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}), maxWidth: 560 }}>
-          <div style={styles.loginContent}>
-            <div style={styles.logoSection}>
-              <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
-              <h1 style={styles.logoText}>Olko ERP</h1>
-              <p style={styles.subtitle}>
-                {sorted.length ? 'İş sahəsi seçin' : 'İlk iş sahənizi əlavə edin'}
-              </p>
-            </div>
-
-            <div style={styles.form}>
-              {sorted.map(w => (
-                <div key={w.id} style={styles.wsRow}>
-                  <button
-                    style={{ ...styles.wsCard, opacity: busyId === w.id ? 0.6 : 1 }}
-                    onClick={() => void openWorkspace(w)}
-                    disabled={busyId === w.id}
-                  >
-                    <span style={{
-                      ...styles.wsBadge,
-                      background: w.kind === 'portal' ? '#0f766e' : '#4f46e5',
-                    }}>
-                      {w.kind === 'portal' ? 'Müştəri' : 'İstifadəçi'}
-                    </span>
-                    <span style={styles.wsSite}>{w.label || w.site}</span>
-                    {busyId === w.id && <span style={styles.wsHint}>açılır…</span>}
-                  </button>
-                  <button
-                    style={styles.wsRemove}
-                    title="Siyahıdan sil"
-                    onClick={() => removeWorkspace(w.id)}
-                  >×</button>
-                </div>
-              ))}
-
-              {error && <div style={styles.error}>{error}</div>}
-
-              <button style={styles.button} onClick={() => { setError(''); setScreen('add') }}>
-                + Yeni iş sahəsi
-              </button>
-
-              {/* 🔴 2026-08-14: yeniləmə yoxlanışı uğursuz olubsa SƏBƏBİ göstər.
-                  İstifadəçi «Windows-da yenilənmə getmədi» dedi və heç bir iz
-                  yox idi — `UpdateGate` xətanı səssizcə udurdu. İndi son xəta
-                  burada görünür ki, növbəti dəfə təxmin yox, FAKT olsun. */}
-              {updateError && (
-                <p style={{ ...styles.note, color: '#b45309' }}>
-                  Yeniləmə yoxlanışı alınmadı: {updateError}
-                </p>
-              )}
-
-              {/* 🔴 Xəbərdarlıq TƏXMİNƏ görə yox, SINAQ NƏTİCƏSİNƏ görə çıxır:
-                  `openWorkspace.ts` izolyasiyalı açmağı bir dəfə sınayır və
-                  platforma dəstəkləmirsə bunu yadda saxlayır. Əvvəlki
-                  versiyada macOS versiyasını user-agent-dən oxuyurdum — brauzer
-                  onu `10_15_7` kimi dondurduğu üçün xəbərdarlıq HƏMİŞƏ
-                  görünürdü və izolyasiya lazımsız yerə söndürülürdü. */}
-              {/* 🔴 45.46: xəbərdarlıq yalnız EYNİ hostu paylaşan işçi+müştəri
-                  cütü varsa göstərilir. Portal ayrı hostdadırsa (portal.admedia.az)
-                  sessiyalar onsuz da brauzer qaydası ilə ayrıdır — köhnə ümumi
-                  xəbərdarlıq istifadəçini «hələ də qarışır» deyə çaşdırırdı. */}
-              {!IS_MOBILE && !isolationSupported() && (() => {
-                const hosts = (w: Workspace) => w.kind === 'portal' ? (w.portalSite || w.site) : w.site
-                const users = workspaces.filter(w => w.kind === 'user').map(hosts)
-                const portals = workspaces.filter(w => w.kind === 'portal').map(hosts)
-                return portals.some(p => users.includes(p))
-              })() && (
-                <p style={styles.note}>
-                  Bu sistemdə iş sahələri eyni sessiyanı paylaşır — eyni
-                  biznesdə ikinci tərəfə keçəndə birincidən çıxış olur.
-                  {isolationFailureReason() && (
-                    <><br /><span style={{ opacity: 0.75 }}>Səbəb: {isolationFailureReason()}</span></>
-                  )}
-                </p>
-              )}
+      <div style={{ ...styles.shell, ...(IS_MOBILE ? mobileOuter : {}) }}>
+        {/* ─── Başlıq zolağı ─── */}
+        <header style={styles.topBar}>
+          <div style={styles.brand}>
+            <img src={olkoLogo} alt="" style={styles.brandLogo} />
+            <div>
+              <div style={styles.brandName}>Olko ERP</div>
+              <div style={styles.brandSub}>
+                {sorted.length
+                  ? `${sorted.length} iş sahəsi`
+                  : 'İlk iş sahənizi əlavə edin'}
+              </div>
             </div>
           </div>
-        </div>
+          <button style={styles.topAdd} onClick={() => { setError(''); setScreen('add') }}>
+            <span style={styles.topAddPlus}>+</span> Yeni iş sahəsi
+          </button>
+        </header>
+
+        {/* ─── Kart şəbəkəsi ─── */}
+        <main style={styles.board}>
+          {sorted.length === 0 && (
+            <div style={styles.emptyBox}>
+              <div style={styles.emptyIcon}>◳</div>
+              <p style={styles.emptyTitle}>Hələ iş sahəsi yoxdur</p>
+              <p style={styles.emptyText}>
+                Biznesinizi əlavə edin — işçi paneli və müştəri portalı ayrı-ayrı
+                pəncərələrdə açılacaq.
+              </p>
+              <button style={styles.emptyBtn} onClick={() => { setError(''); setScreen('add') }}>
+                Başlayaq
+              </button>
+            </div>
+          )}
+
+          {sorted.length > 0 && (
+            <div style={styles.grid}>
+              {sorted.map(w => {
+                const host = w.kind === 'portal' ? (w.portalSite || w.site) : w.site
+                const isOpen = openLabels.includes(`ws-${w.id}`)
+                const busy = busyId === w.id
+                return (
+                  <div key={w.id} style={styles.card}>
+                    <button
+                      style={{ ...styles.cardMain, opacity: busy ? 0.55 : 1 }}
+                      onClick={() => void openWorkspace(w)}
+                      disabled={busy}
+                      title={host}
+                    >
+                      {/* Üz — determinist rəng + monoqram */}
+                      <div style={{ ...styles.cover, background: coverGradient(brandKey(w.site)) }}>
+                        <span style={styles.monogram}>{monogram(w.label || w.site)}</span>
+                        <span style={{
+                          ...styles.dot,
+                          background: isOpen ? '#22c55e' : 'rgba(255,255,255,0.55)',
+                          boxShadow: isOpen ? '0 0 0 3px rgba(34,197,94,0.25)' : 'none',
+                        }} />
+                        <span style={{
+                          ...styles.kindTag,
+                          background: w.kind === 'portal' ? 'rgba(13,148,136,0.92)' : 'rgba(79,70,229,0.92)',
+                        }}>
+                          {w.kind === 'portal' ? 'Müştəri' : 'İstifadəçi'}
+                        </span>
+                      </div>
+
+                      {/* Ünvan zolağı */}
+                      <div style={styles.cardFoot}>
+                        <span style={styles.cardHost}>{w.label || host}</span>
+                        <span style={styles.cardMeta}>
+                          {busy ? 'açılır…' : isOpen ? 'açıqdır' : lastSeen(w.lastOpenedAt)}
+                        </span>
+                      </div>
+                    </button>
+
+                    <button
+                      style={styles.cardRemove}
+                      title="Siyahıdan sil"
+                      onClick={() => removeWorkspace(w.id)}
+                    >×</button>
+                  </div>
+                )
+              })}
+
+              {/* Əlavəetmə kartı — şəbəkənin təbii sonu */}
+              <button style={styles.addCard} onClick={() => { setError(''); setScreen('add') }}>
+                <span style={styles.addCardPlus}>+</span>
+                <span style={styles.addCardText}>Yeni iş sahəsi</span>
+              </button>
+            </div>
+          )}
+
+          {error && <div style={styles.error}>{error}</div>}
+
+          {updateError && (
+            <p style={{ ...styles.note, color: '#b45309', textAlign: 'center' }}>
+              Yeniləmə yoxlanışı alınmadı: {updateError}
+            </p>
+          )}
+
+          {/* 🔴 45.46: yalnız EYNİ hostu paylaşan işçi+müştəri cütü varsa */}
+          {!IS_MOBILE && !isolationSupported() && (() => {
+            const hostOf = (w: Workspace) => w.kind === 'portal' ? (w.portalSite || w.site) : w.site
+            const users = workspaces.filter(w => w.kind === 'user').map(hostOf)
+            return workspaces.filter(w => w.kind === 'portal').map(hostOf).some(p => users.includes(p))
+          })() && (
+            <p style={{ ...styles.note, textAlign: 'center' }}>
+              Bu sistemdə iş sahələri eyni sessiyanı paylaşır — eyni biznesdə
+              ikinci tərəfə keçəndə birincidən çıxış olur.
+              {isolationFailureReason() && (
+                <><br /><span style={{ opacity: 0.75 }}>Səbəb: {isolationFailureReason()}</span></>
+              )}
+            </p>
+          )}
+        </main>
       </div>
     )
   }
@@ -313,86 +441,96 @@ function App() {
   // ══════════ YENİ İŞ SAHƏSİ — əvvəl TƏRƏF, sonra biznes ══════════
   if (screen === 'add') {
     return (
-      <div style={{ ...styles.bubbleOuter, ...(IS_MOBILE ? mobileOuter : {}) }}>
-        <div style={{ ...styles.bubble, ...(IS_MOBILE ? mobileBubble : {}) }}>
-          <div style={styles.loginContent}>
-            <div style={styles.logoSection}>
-              <img src={olkoLogo} alt="Olko ERP" style={styles.logoIcon} />
-              <h1 style={styles.logoText}>Yeni iş sahəsi</h1>
-              <p style={styles.subtitle}>
+      <div style={{ ...styles.shell, ...(IS_MOBILE ? mobileOuter : {}) }}>
+        <header style={styles.topBar}>
+          <div style={styles.brand}>
+            <img src={olkoLogo} alt="" style={styles.brandLogo} />
+            <div>
+              <div style={styles.brandName}>Yeni iş sahəsi</div>
+              <div style={styles.brandSub}>
                 {newKind ? 'Biznes adını daxil edin' : 'Hansı tərəfdən daxil olursunuz?'}
-              </p>
-            </div>
-
-            <div style={styles.form}>
-              {/* Addım 1 — tərəf */}
-              <div style={styles.kindRow}>
-                {(['user', 'portal'] as WorkspaceKind[]).map(k => (
-                  <button
-                    key={k}
-                    style={{
-                      ...styles.kindBtn,
-                      ...(newKind === k ? styles.kindBtnActive : {}),
-                    }}
-                    onClick={() => { setError(''); setNewKind(k) }}
-                  >
-                    <span style={styles.kindTitle}>
-                      {k === 'user' ? 'İstifadəçi' : 'Müştəri'}
-                    </span>
-                    <span style={styles.kindSub}>
-                      {k === 'user' ? 'Şirkət işçisi — ERP' : 'Portal — sifariş və hesablar'}
-                    </span>
-                  </button>
-                ))}
               </div>
-
-              {/* Addım 2 — biznes adı (yalnız tərəf seçiləndən sonra) */}
-              {newKind && (
-                <div style={styles.field}>
-                  <label style={styles.label}>Biznes adı</label>
-                  <input
-                    style={styles.input}
-                    type="text"
-                    placeholder="biznesiniz"
-                    value={siteUrl}
-                    onChange={e => setSiteUrl(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    autoFocus
-                  />
-                  {siteUrl.trim() && (
-                    <p style={styles.note}>
-                      Açılacaq: {workspaceUrl({
-                        id: '', kind: newKind, site: previewHost || normalizeSite(siteUrl), createdAt: 0,
-                      })}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {error && <div style={styles.error}>{error}</div>}
-
-              <button
-                style={{ ...styles.button, opacity: newKind ? 1 : 0.5,
-                         cursor: newKind ? 'pointer' : 'not-allowed' }}
-                onClick={() => void handleAdd()}
-                disabled={!newKind || resolving}
-              >
-                {resolving ? 'Yoxlanılır…' : 'Əlavə et və aç'}
-              </button>
-              <button
-                style={styles.linkBtn}
-                onClick={() => { setError(''); setNewKind(null); setSiteUrl(''); setScreen('launcher') }}
-              >
-                Geri
-              </button>
             </div>
           </div>
-        </div>
+          <button
+            style={styles.topGhost}
+            onClick={() => { setError(''); setNewKind(null); setSiteUrl(''); setScreen('launcher') }}
+          >
+            ← Geri
+          </button>
+        </header>
+
+        <main style={{ ...styles.board, alignItems: 'center' }}>
+          <div style={styles.addPanel}>
+            {/* Addım 1 — tərəf */}
+            <div style={styles.kindRow}>
+              {(['user', 'portal'] as WorkspaceKind[]).map(k => (
+                <button
+                  key={k}
+                  style={{
+                    ...styles.kindBtn,
+                    ...(newKind === k
+                      ? (k === 'portal' ? styles.kindBtnActivePortal : styles.kindBtnActiveUser)
+                      : {}),
+                  }}
+                  onClick={() => { setError(''); setNewKind(k) }}
+                >
+                  <span style={{
+                    ...styles.kindDot,
+                    background: k === 'portal' ? '#0d9488' : '#4f46e5',
+                  }} />
+                  <span style={styles.kindTitle}>{k === 'user' ? 'İstifadəçi' : 'Müştəri'}</span>
+                  <span style={styles.kindSub}>
+                    {k === 'user' ? 'Şirkət işçisi — ERP paneli' : 'Portal — sifariş və hesablar'}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Addım 2 — biznes adı */}
+            {newKind && (
+              <div style={styles.field}>
+                <label style={styles.label}>Biznes adı</label>
+                <input
+                  style={styles.input}
+                  type="text"
+                  placeholder="biznesiniz"
+                  value={siteUrl}
+                  onChange={e => setSiteUrl(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  autoFocus
+                />
+                {siteUrl.trim() && (
+                  <p style={styles.note}>
+                    Açılacaq: {workspaceUrl({
+                      id: '', kind: newKind, site: previewHost || normalizeSite(siteUrl), createdAt: 0,
+                    })}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {error && <div style={styles.error}>{error}</div>}
+
+            <button
+              style={{
+                ...styles.primaryBtn,
+                opacity: newKind && !resolving ? 1 : 0.5,
+                cursor: newKind && !resolving ? 'pointer' : 'not-allowed',
+              }}
+              onClick={() => void handleAdd()}
+              disabled={!newKind || resolving}
+            >
+              {resolving ? 'Yoxlanılır…' : 'Əlavə et və aç'}
+            </button>
+          </div>
+        </main>
       </div>
     )
   }
+
 
   // ✅ 2026-07-27: iframe-li "app ekranı" SİLİNDİ — `location.replace` ilə ERP-yə
   // keçdikdən sonra bu React tətbiqi ümumiyyətlə yüklü qalmır. Ona görə iframe,
@@ -402,233 +540,280 @@ function App() {
 
 // Mobil-də üzən kart yerinə tam-ekran görünüş
 const mobileOuter: React.CSSProperties = { padding: 0 }
-const mobileBubble: React.CSSProperties = { borderRadius: 0, border: 'none', boxShadow: 'none' }
 
 const styles: Record<string, React.CSSProperties> = {
-  // ✅ 2026-07-27: ERP ekranı TAM PƏNCƏRƏNİ doldurur.
-  // Əvvəl giriş kartı ilə eyni `bubble` stilini işlədirdi (maxWidth 420) →
-  // 1440px pəncərədə ERP ortada kiçik kartda görünürdü ("proqram içində proqram").
-  appOuter: {
+  // ═══ Faza 45.48 — AnyDesk tərzi konsol görünüşü ═══
+  // Palitra QƏSDƏN Olko-nundur: indiqo (işçi) + firuzəyi (müştəri).
+  // AnyDesk-in qırmızısı götürülməyib — bu, bizim məhsulun kimliyidir.
+  shell: {
     height: '100%',
     display: 'flex',
-    background: '#ffffff',
-  },
-  appShell: {
-    flex: 1,
-    display: 'flex',
     flexDirection: 'column',
-    minWidth: 0,
-    background: '#ffffff',
+    background: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
+    color: '#0f172a',
   },
-  bubbleOuter: {
-    // ✅ Normal pəncərədə giriş kartı ortada dayanır (əvvəl 424px bubble-ı doldururdu)
-    height: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    background: '#f1f5f9',
-  },
-  bubble: {
-    width: '100%',
-    maxWidth: 420,
-    maxHeight: '92%',
-    display: 'flex',
-    flexDirection: 'column',
-    background: '#ffffff',
-    borderRadius: 20,
-    overflow: 'hidden',
-    boxShadow: '0 12px 48px rgba(0,0,0,0.25), 0 4px 16px rgba(0,0,0,0.1)',
-    border: '1px solid rgba(0,0,0,0.08)',
-  },
-  // Drag bar
-  dragBar: {
+  topBar: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '6px 10px',
-    background: '#f8fafc',
-    borderBottom: '1px solid #f1f5f9',
+    gap: 12,
+    padding: '14px 20px',
+    background: 'rgba(255,255,255,0.72)',
+    borderBottom: '1px solid rgba(15,23,42,0.07)',
+    backdropFilter: 'blur(8px)',
+  },
+  brand: { display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 },
+  brandLogo: { width: 34, height: 34, objectFit: 'contain' as const, flexShrink: 0 },
+  brandName: { fontSize: 15, fontWeight: 700, letterSpacing: -0.2, color: '#0f172a' },
+  brandSub: { fontSize: 11.5, color: '#64748b', marginTop: 1 },
+  topAdd: {
     flexShrink: 0,
-    cursor: 'grab',
-    userSelect: 'none',
-  },
-  dragDots: {
-    display: 'flex',
-    gap: 5,
-    padding: '4px 2px',
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    background: '#cbd5e1',
-  },
-  dragActions: {
-    display: 'flex',
-    gap: 4,
-  },
-  controlBtn: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '8px 14px',
+    borderRadius: 10,
     border: 'none',
-    background: 'transparent',
-    color: '#94a3b8',
+    background: '#4f46e5',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    font: 'inherit',
+    boxShadow: '0 1px 2px rgba(79,70,229,0.35)',
+  },
+  topAddPlus: { fontSize: 15, lineHeight: 1, marginTop: -1 },
+  topGhost: {
+    flexShrink: 0,
+    padding: '8px 14px',
+    borderRadius: 10,
+    border: '1px solid rgba(15,23,42,0.10)',
+    background: '#fff',
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    font: 'inherit',
+  },
+  board: {
+    flex: 1,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+    padding: '22px 20px 28px',
+  },
+
+  // ─── Kart şəbəkəsi ───
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+    gap: 16,
+    alignContent: 'start',
+  },
+  card: { position: 'relative', minWidth: 0 },
+  cardMain: {
+    width: '100%',
+    display: 'block',
+    padding: 0,
+    borderRadius: 14,
+    overflow: 'hidden',
+    border: '1px solid rgba(15,23,42,0.09)',
+    background: '#fff',
+    cursor: 'pointer',
+    textAlign: 'left',
+    font: 'inherit',
+    boxShadow: '0 1px 2px rgba(15,23,42,0.06), 0 8px 20px -12px rgba(15,23,42,0.25)',
+    transition: 'transform 0.14s ease, box-shadow 0.14s ease',
+  },
+  cover: {
+    position: 'relative',
+    height: 104,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    cursor: 'pointer',
-    transition: 'background 0.15s, color 0.15s',
   },
-  headerInfo: {
+  monogram: {
+    fontSize: 26,
+    fontWeight: 800,
+    letterSpacing: 1,
+    color: 'rgba(255,255,255,0.94)',
+    textShadow: '0 1px 10px rgba(0,0,0,0.28)',
+    userSelect: 'none',
+  },
+  dot: {
+    position: 'absolute',
+    top: 9,
+    left: 9,
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+  },
+  kindTag: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    padding: '2.5px 8px',
+    borderRadius: 999,
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0.2,
+  },
+  cardFoot: {
     display: 'flex',
-    alignItems: 'center',
-    gap: 7,
+    flexDirection: 'column',
+    gap: 2,
+    padding: '9px 11px 11px',
+    minWidth: 0,
   },
-  headerLogoBadge: {
+  cardHost: {
+    fontSize: 12.5,
+    fontWeight: 650,
+    color: '#0f172a',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  cardMeta: { fontSize: 10.5, color: '#94a3b8' },
+  cardRemove: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
     width: 22,
     height: 22,
-    objectFit: 'contain' as const,
+    borderRadius: 7,
+    border: 'none',
+    background: 'rgba(15,23,42,0.35)',
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: '20px',
+    cursor: 'pointer',
+    font: 'inherit',
   },
-  headerLabel: {
-    fontSize: 12,
-    fontWeight: 600,
+  addCard: {
+    minHeight: 160,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 14,
+    border: '1.5px dashed rgba(15,23,42,0.18)',
+    background: 'rgba(255,255,255,0.5)',
     color: '#64748b',
+    cursor: 'pointer',
+    font: 'inherit',
   },
-  // Login
-  loginContent: {
+  addCardPlus: { fontSize: 24, lineHeight: 1, color: '#94a3b8' },
+  addCardText: { fontSize: 12, fontWeight: 600 },
+
+  // ─── Boş vəziyyət ───
+  emptyBox: {
+    margin: 'auto',
+    maxWidth: 380,
+    textAlign: 'center' as const,
+    padding: '28px 24px',
+    borderRadius: 16,
+    background: '#fff',
+    border: '1px solid rgba(15,23,42,0.08)',
+    boxShadow: '0 10px 30px -18px rgba(15,23,42,0.35)',
+  },
+  emptyIcon: { fontSize: 26, color: '#cbd5e1', marginBottom: 6 },
+  emptyTitle: { fontSize: 15, fontWeight: 700, margin: '0 0 6px' },
+  emptyText: { fontSize: 12.5, color: '#64748b', lineHeight: 1.5, margin: '0 0 16px' },
+  emptyBtn: {
+    padding: '9px 20px',
+    borderRadius: 10,
+    border: 'none',
+    background: '#4f46e5',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    font: 'inherit',
+  },
+
+  // ─── Əlavəetmə paneli ───
+  addPanel: {
+    width: '100%',
+    maxWidth: 460,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+    padding: 20,
+    borderRadius: 16,
+    background: '#fff',
+    border: '1px solid rgba(15,23,42,0.08)',
+    boxShadow: '0 10px 30px -18px rgba(15,23,42,0.35)',
+  },
+  kindRow: { display: 'flex', gap: 10 },
+  kindBtn: {
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: 'center',
-    padding: '24px 28px 32px',
-    overflow: 'auto',
+    gap: 4,
+    padding: '13px 12px',
+    borderRadius: 12,
+    border: '1.5px solid rgba(15,23,42,0.10)',
+    background: '#fff',
+    cursor: 'pointer',
+    textAlign: 'left',
+    font: 'inherit',
   },
-  logoSection: {
-    textAlign: 'center' as const,
-    marginBottom: 28,
+  kindBtnActiveUser: {
+    borderColor: '#4f46e5',
+    boxShadow: '0 0 0 3px rgba(79,70,229,0.12)',
+    background: '#f5f4ff',
   },
-  logoIcon: {
-    width: 60,
-    height: 60,
-    objectFit: 'contain' as const,
-    marginBottom: 10,
+  kindBtnActivePortal: {
+    borderColor: '#0d9488',
+    boxShadow: '0 0 0 3px rgba(13,148,136,0.12)',
+    background: '#f0fdfa',
   },
-  logoText: {
-    fontSize: 20,
-    fontWeight: 700,
-    color: '#1e293b',
-    margin: '0 0 4px',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#94a3b8',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: 14,
-  },
-  field: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: 5,
-  },
+  kindDot: { width: 7, height: 7, borderRadius: '50%', marginBottom: 2 },
+  kindTitle: { fontSize: 13.5, fontWeight: 700, color: '#0f172a' },
+  kindSub: { fontSize: 11, color: '#64748b', lineHeight: 1.35 },
+  field: { display: 'flex', flexDirection: 'column' as const, gap: 5 },
   label: {
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 10.5,
+    fontWeight: 700,
     color: '#64748b',
     textTransform: 'uppercase' as const,
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   input: {
-    padding: '9px 12px',
+    padding: '10px 12px',
     border: '1.5px solid #e2e8f0',
     borderRadius: 10,
     fontSize: 14,
     outline: 'none',
-    transition: 'border-color 0.2s',
     background: '#f8fafc',
+    font: 'inherit',
   },
-  // ── Faza 1.0: iş sahəsi kartları ──
-  wsRow: { display: 'flex', alignItems: 'stretch', gap: 8 },
-  wsCard: {
-    flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
-    padding: '12px 14px', borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)',
-    background: '#ffffff', cursor: 'pointer', textAlign: 'left', font: 'inherit',
-  },
-  wsBadge: {
-    flexShrink: 0, color: '#fff', fontSize: 11, fontWeight: 700,
-    padding: '3px 8px', borderRadius: 999, letterSpacing: 0.2,
-  },
-  wsSite: {
-    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap', fontSize: 14, color: '#0f172a', fontWeight: 600,
-  },
-  wsHint: { flexShrink: 0, fontSize: 12, color: '#64748b' },
-  wsRemove: {
-    flexShrink: 0, width: 36, borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)',
-    background: '#ffffff', color: '#94a3b8', fontSize: 18, cursor: 'pointer',
-  },
-  kindRow: { display: 'flex', gap: 10 },
-  kindBtn: {
-    flex: 1, display: 'flex', flexDirection: 'column', gap: 4, padding: '14px 12px',
-    borderRadius: 12, border: '1px solid rgba(0,0,0,0.10)', background: '#ffffff',
-    cursor: 'pointer', textAlign: 'left', font: 'inherit',
-  },
-  kindBtnActive: { borderColor: '#4f46e5', boxShadow: '0 0 0 3px rgba(79,70,229,0.12)' },
-  kindTitle: { fontSize: 14, fontWeight: 700, color: '#0f172a' },
-  kindSub: { fontSize: 11.5, color: '#64748b', lineHeight: 1.35 },
-  note: { fontSize: 11.5, color: '#64748b', margin: '6px 0 0', lineHeight: 1.4 },
-  linkBtn: {
-    background: 'none', border: 'none', color: '#64748b', fontSize: 13,
-    cursor: 'pointer', padding: 6, font: 'inherit',
-  },
-  error: {
-    background: '#fef2f2',
-    color: '#dc2626',
-    padding: '8px 12px',
-    borderRadius: 8,
-    fontSize: 12,
-    textAlign: 'center' as const,
-  },
-  button: {
+  primaryBtn: {
     padding: '11px',
     border: 'none',
     borderRadius: 10,
-    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+    background: '#4f46e5',
     color: '#fff',
     fontSize: 14,
     fontWeight: 600,
     cursor: 'pointer',
-    marginTop: 2,
-    boxShadow: '0 2px 10px rgba(79, 70, 229, 0.3)',
+    font: 'inherit',
+    boxShadow: '0 1px 2px rgba(79,70,229,0.35)',
   },
-  // Nav bar
-  navBar: {
-    display: 'flex',
-    gap: 0,
-    background: '#fff',
-    borderBottom: '1px solid #f1f5f9',
-    flexShrink: 0,
-  },
-  navBtn: {
-    flex: 1,
-    padding: '8px 4px',
-    border: 'none',
-    background: '#fff',
-    fontSize: 16,
-    cursor: 'pointer',
-    transition: 'background 0.15s',
-  },
-  // iframe
-  iframe: {
-    flex: 1,
-    border: 'none',
-    width: '100%',
-    // Kart yuvarlaqlığı GÖTÜRÜLDÜ — ERP artıq tam pəncərəni doldurur
-    borderRadius: 0,
+
+  note: { fontSize: 11.5, color: '#64748b', margin: '4px 0 0', lineHeight: 1.45 },
+  error: {
+    background: '#fef2f2',
+    color: '#dc2626',
+    padding: '9px 12px',
+    borderRadius: 10,
+    fontSize: 12,
+    textAlign: 'center' as const,
+    border: '1px solid #fecaca',
   },
 }
 
