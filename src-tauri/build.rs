@@ -5,7 +5,7 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new()
-                .commands(&["open_external", "native_ping", "native_test", "native_print"]),
+                .commands(&["open_external", "native_ping", "native_test", "native_print", "ws_list", "ws_save", "ws_open", "ws_show_launcher"]),
         ),
     )
     .expect("failed to run tauri-build");

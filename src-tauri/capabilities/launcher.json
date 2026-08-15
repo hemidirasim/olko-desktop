@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "launcher",
+  "description": "Yalnız launcher pəncərəsi: iş sahələri siyahısını YAZA bilir. Remote səhifələrə ws_save verilmir — tenant səhifəsi siyahını əzə bilməsin.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-ws-save"
+  ]
+}

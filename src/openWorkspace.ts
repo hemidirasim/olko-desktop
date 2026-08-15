@@ -120,6 +120,18 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
   const url = workspaceUrl(w)
   const label = windowLabel(w)
 
+  // 🔴 Faza 45.47: ƏSAS YOL RUST-DUR (`ws_open`) — açılış məntiqi artıq TƏK
+  // yerdədir (launcher da, ERP içindəki zolaq da eyni əmri çağırır; iki
+  // paralel implementasiya sessiya qabı seçimində ayrıla bilərdi). Rust həm
+  // fayla upsert edir, həm izolyasiya ilə açır, alınmasa onsuz açır.
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('ws_open', { workspace: w })
+    return { ok: true }
+  } catch {
+    /* invoke yoxdur (brauzer dev) və ya əmr xətası — köhnə JS yoluna düş */
+  }
+
   let api: typeof import('@tauri-apps/api/webviewWindow')
   try {
     api = await import('@tauri-apps/api/webviewWindow')

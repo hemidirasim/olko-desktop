@@ -50,6 +50,20 @@ function App() {
     // `loadWorkspaces()` içində iş sahəsinə çevrilir — heç nə itmir.
     const loaded = loadWorkspaces()
     setWorkspaces(loaded)
+    // 🔴 Faza 45.47: localStorage boşdursa FAYLDAN bərpa et (Rust ws_list).
+    // localStorage iki dəfə itki verdi (45.41, 45.46) — fayl bərpa mənbəyidir.
+    if (!loaded.length) {
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const fromFile = (await invoke('ws_list')) as Workspace[]
+          if (Array.isArray(fromFile) && fromFile.length && !loadWorkspaces().length) {
+            setWorkspaces(fromFile)
+            saveWorkspaces(fromFile)
+          }
+        } catch { /* Tauri yoxdur (dev) */ }
+      })()
+    }
     // 🔴 0.5.0-da əlavə edilmiş iş sahələri TƏXMİNLƏ qurulmuşdu və köhnə
     //    serverə düşə bilər. Açılışda səssizcə kanonik ünvana uyğunlaşdırırıq.
     //    Yalnız reyestr TƏSDİQ edəndə (`canonical`) dəyişirik — şəbəkə

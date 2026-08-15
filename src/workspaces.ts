@@ -201,6 +201,16 @@ export function saveWorkspaces(list: Workspace[]): void {
   } catch {
     /* kvota dolubsa səssiz keç — iş sahəsi itsə də app işləməlidir */
   }
+  // 🔴 Faza 45.47: siyahı FAYLA da güzgülənir (Rust `ws_save`). Səbəb:
+  // ERP içindəki iş sahəsi zolağı remote origin-dədir — launcher-in
+  // localStorage-ına çata bilməz; fayl isə hər iki tərəfdən oxunur.
+  // Fire-and-forget: brauzer dev-də invoke yoxdur, sükutla ötürülür.
+  void (async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('ws_save', { list })
+    } catch { /* Tauri yoxdur (dev) və ya icazə — lokal yaddaş onsuz da yazıldı */ }
+  })()
 }
 
 export function addWorkspace(list: Workspace[], w: Workspace): Workspace[] {

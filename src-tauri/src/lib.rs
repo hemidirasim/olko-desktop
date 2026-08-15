@@ -189,6 +189,182 @@ fn start_bridge() {
     });
 }
 
+// ═════════════════════════════════════════════════════════════════
+// İŞ SAHƏLƏRİ — fayl-əsaslı mənbə + Rust-dan pəncərə açma (Faza 45.47)
+// ═════════════════════════════════════════════════════════════════
+// 🔴 NİYƏ FAYL: siyahı əvvəl yalnız launcher-in localStorage-ında idi.
+// ERP səhifəsindəki iş sahəsi zolağı (remote origin) ona ÇATA BİLMİR —
+// origin ayrıdır. Fayl isə hər iki tərəfdən invoke ilə oxunur. Üstəlik
+// localStorage iki dəfə itki verdi (45.41, 45.46) — fayl bərpa mənbəyidir.
+
+fn ws_store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("workspaces.json"))
+}
+
+fn ws_read(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
+    ws_store_path(app)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn ws_write(app: &tauri::AppHandle, list: &[serde_json::Value]) -> Result<(), String> {
+    let p = ws_store_path(app)?;
+    let body = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
+    std::fs::write(p, body).map_err(|e| e.to_string())
+}
+
+/// 🔴 TS `sessionBytes` İLƏ BİRƏBİR EYNİ OLMALIDIR (workspaces.ts) —
+/// fərqlənsə mövcud istifadəçilərin pəncərə sessiyası itər (yeni boş qab).
+fn ws_session_bytes(id: &str) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for (i, u) in id.encode_utf16().enumerate() {
+        let k = i % 16;
+        out[k] = ((out[k] as u32 * 31 + u as u32) % 256) as u8;
+    }
+    if !out.iter().any(|b| *b != 0) {
+        out[0] = 1;
+    }
+    out[6] = (out[6] & 0x0f) | 0x40;
+    out[8] = (out[8] & 0x3f) | 0x80;
+    out
+}
+
+fn ws_field<'a>(w: &'a serde_json::Value, key: &str) -> &'a str {
+    w.get(key).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// 🔴 `ws_open` REMOTE səhifədən çağırıla bilir → host formatı ciddi yoxlanır
+/// (yalnız host: sxem, yol, port, boşluq yox). resolveSiteHost-dakı qayda ilə eyni.
+fn ws_valid_host(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 253
+        && h.contains('.')
+        && h.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+        && !h.starts_with(['.', '-'])
+        && !h.ends_with(['.', '-'])
+}
+
+fn ws_url(w: &serde_json::Value) -> String {
+    let site = ws_field(w, "site");
+    if ws_field(w, "kind") == "portal" {
+        let ps = ws_field(w, "portalSite");
+        format!("https://{}/portal", if ps.is_empty() { site } else { ps })
+    } else {
+        format!("https://{}", site)
+    }
+}
+
+fn ws_label(id: &str) -> String {
+    let clean: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    format!("ws-{clean}")
+}
+
+#[tauri::command]
+fn ws_list(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    ws_read(&app)
+}
+
+#[tauri::command]
+fn ws_save(app: tauri::AppHandle, list: Vec<serde_json::Value>) -> Result<(), String> {
+    ws_write(&app, &list)
+}
+
+#[tauri::command]
+fn ws_show_launcher(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        Ok(())
+    } else {
+        Err("launcher pəncərəsi tapılmadı".into())
+    }
+}
+
+/// İş sahəsini aç (varsa önə gətir). `workspace` TAM OBYEKT gəlir — fayla
+/// upsert edilir, sonra açılır. Ona görə launcher-in async yazısını
+/// gözləmək lazım gəlmir və fayl həmişə aktual qalır.
+#[tauri::command]
+fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    let id = ws_field(&workspace, "id").to_string();
+    if id.is_empty() {
+        return Err("id boşdur".into());
+    }
+    for key in ["site", "portalSite"] {
+        let h = ws_field(&workspace, key);
+        if !h.is_empty() && !ws_valid_host(h) {
+            return Err(format!("yanlış host: {h}"));
+        }
+    }
+    if ws_field(&workspace, "site").is_empty() {
+        return Err("site boşdur".into());
+    }
+
+    // Upsert + lastOpenedAt
+    let mut list = ws_read(&app);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut w = workspace.clone();
+    if let Some(obj) = w.as_object_mut() {
+        obj.insert("lastOpenedAt".into(), serde_json::json!(now));
+    }
+    if let Some(pos) = list.iter().position(|x| ws_field(x, "id") == id) {
+        list[pos] = w.clone();
+    } else {
+        list.push(w.clone());
+    }
+    let _ = ws_write(&app, &list);
+
+    let label = ws_label(&id);
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let url: tauri::Url = ws_url(&w).parse().map_err(|e| format!("{e}"))?;
+    let title = format!(
+        "{} — {}",
+        {
+            let l = ws_field(&w, "label");
+            if l.is_empty() { ws_field(&w, "site") } else { l }.to_string()
+        },
+        if ws_field(&w, "kind") == "portal" { "Müştəri" } else { "İstifadəçi" }
+    );
+
+    let build = |isolated: bool| -> tauri::Result<tauri::WebviewWindow> {
+        let mut b = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url.clone()))
+            .title(&title)
+            .inner_size(1440.0, 900.0)
+            .min_inner_size(1024.0, 700.0)
+            .center();
+        if isolated {
+            #[cfg(target_os = "macos")]
+            {
+                b = b.data_store_identifier(ws_session_bytes(&id));
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                b = b.data_directory(std::path::PathBuf::from(&label));
+            }
+        }
+        b.build()
+    };
+
+    // Əvvəl izolyasiya ilə, alınmasa onsuz (JS tərəfdəki qayda ilə eyni)
+    match build(true) {
+        Ok(_) => Ok(()),
+        Err(_) => build(false).map(|_| ()).map_err(|e| e.to_string()),
+    }
+}
+
 #[tauri::command]
 fn open_external(url: String) {
     // `open` crate-i yalnız desktop-da mövcuddur; mobil-də webview daxilində qalırıq
@@ -305,7 +481,11 @@ pub fn run() {
             open_external,
             native_ping,
             native_test,
-            native_print
+            native_print,
+            ws_list,
+            ws_save,
+            ws_open,
+            ws_show_launcher
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
