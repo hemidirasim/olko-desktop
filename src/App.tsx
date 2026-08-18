@@ -371,14 +371,23 @@ function App() {
             <div style={styles.columns}>
               {([
                 { kind: 'user' as WorkspaceKind, title: 'İstifadəçi',
-                  hint: 'Şirkət işçisi — ERP paneli', accent: '#4f46e5' },
+                  hint: 'Şirkət işçisi — ERP paneli', accent: '#4f46e5',
+                  surface: 'rgba(79,70,229,0.045)', edge: 'rgba(79,70,229,0.16)' },
                 { kind: 'portal' as WorkspaceKind, title: 'Müştəri portalı',
-                  hint: 'Sifariş və hesablar', accent: '#0d9488' },
+                  hint: 'Sifariş və hesablar', accent: '#0d9488',
+                  surface: 'rgba(13,148,136,0.05)', edge: 'rgba(13,148,136,0.18)' },
               ]).map(col => {
                 const items = sorted.filter(w => w.kind === col.kind)
                 return (
-                  <section key={col.kind} style={styles.column}>
-                    <div style={styles.colHead}>
+                  <section
+                    key={col.kind}
+                    style={{
+                      ...styles.column,
+                      background: col.surface,
+                      border: `1px solid ${col.edge}`,
+                    }}
+                  >
+                    <div style={{ ...styles.colHead, borderBottomColor: col.edge }}>
                       <span style={{ ...styles.colDot, background: col.accent }} />
                       <span style={styles.colTitle}>{col.title}</span>
                       <span style={styles.colCount}>{items.length}</span>
@@ -649,10 +658,19 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 22,
     alignItems: 'start',
   },
-  column: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 },
+  /* 🔴 45.67 — İstifadəçi: «araya sərhəd qoyardın da və ya iki tərəfin arxa fon
+     rəngini fərqli edərdin». İkisi birlikdə: hər sütun öz çalarında PANELdir.
+     Niyə şaquli xətt yox: dar pəncərədə sütunlar alt-alta düşür və oradakı
+     şaquli sərhəd mənasız olardı — panel isə hər iki düzülüşdə işləyir.
+     Çalar çox zəifdir (≈5%): kartlar öz rənglərini saxlamalıdır, panel yalnız
+     sahəni müəyyən edir. */
+  column: {
+    display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0,
+    padding: 14, borderRadius: 16,
+  },
   colHead: {
     display: 'flex', alignItems: 'center', gap: 8,
-    padding: '0 2px 8px',
+    padding: '0 2px 10px',
     borderBottom: '1px solid rgba(15,23,42,0.08)',
   },
   colDot: { width: 8, height: 8, borderRadius: 999, flexShrink: 0 },
