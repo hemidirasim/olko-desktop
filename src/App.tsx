@@ -356,58 +356,93 @@ function App() {
           )}
 
           {sorted.length > 0 && (
-            <div style={styles.grid}>
-              {sorted.map(w => {
-                const host = w.kind === 'portal' ? (w.portalSite || w.site) : w.site
-                const isOpen = openLabels.includes(`ws-${w.id}`)
-                const busy = busyId === w.id
+            /* ─── İKİ SÜTUN ───────────────────────────────────────────────
+               İstifadəçi: «bu şeyi 2 sütuna ayır… sağ sütunda portallar olsun».
+
+               Niyə vacibdir: kart üzündə cəmi kiçik bir etiket («İstifadəçi» /
+               «Müştəri») fərqi daşıyırdı, ünvan isə eyni brendin iki hostu
+               olduğu üçün ekranda ADM · ADM görünürdü. Yəni fərqi oxumaq üçün
+               kartı diqqətlə süzmək lazım idi. İndi fərq YERdən oxunur —
+               sütun başlığı sualı əvvəlcədən cavablandırır.
+
+               Hər sütunun öz «+» kartı var və o, tərəfi ƏVVƏLCƏDƏN seçir:
+               portal sütunundan əlavə edəndə yenidən «müştəri?» soruşmaq
+               istifadəçinin onsuz da verdiyi cavabı təkrar istəmək olardı. */
+            <div style={styles.columns}>
+              {([
+                { kind: 'user' as WorkspaceKind, title: 'İstifadəçi',
+                  hint: 'Şirkət işçisi — ERP paneli', accent: '#4f46e5' },
+                { kind: 'portal' as WorkspaceKind, title: 'Müştəri portalı',
+                  hint: 'Sifariş və hesablar', accent: '#0d9488' },
+              ]).map(col => {
+                const items = sorted.filter(w => w.kind === col.kind)
                 return (
-                  <div key={w.id} style={styles.card}>
-                    <button
-                      style={{ ...styles.cardMain, opacity: busy ? 0.55 : 1 }}
-                      onClick={() => void openWorkspace(w)}
-                      disabled={busy}
-                      title={host}
-                    >
-                      {/* Üz — determinist rəng + monoqram */}
-                      <div style={{ ...styles.cover, background: coverGradient(brandKey(w.site)) }}>
-                        <span style={styles.monogram}>{monogram(w.label || w.site)}</span>
-                        <span style={{
-                          ...styles.dot,
-                          background: isOpen ? '#22c55e' : 'rgba(255,255,255,0.55)',
-                          boxShadow: isOpen ? '0 0 0 3px rgba(34,197,94,0.25)' : 'none',
-                        }} />
-                        <span style={{
-                          ...styles.kindTag,
-                          background: w.kind === 'portal' ? 'rgba(13,148,136,0.92)' : 'rgba(79,70,229,0.92)',
-                        }}>
-                          {w.kind === 'portal' ? 'Müştəri' : 'İstifadəçi'}
-                        </span>
-                      </div>
+                  <section key={col.kind} style={styles.column}>
+                    <div style={styles.colHead}>
+                      <span style={{ ...styles.colDot, background: col.accent }} />
+                      <span style={styles.colTitle}>{col.title}</span>
+                      <span style={styles.colCount}>{items.length}</span>
+                      <span style={styles.colHint}>{col.hint}</span>
+                    </div>
 
-                      {/* Ünvan zolağı */}
-                      <div style={styles.cardFoot}>
-                        <span style={styles.cardHost}>{w.label || host}</span>
-                        <span style={styles.cardMeta}>
-                          {busy ? 'açılır…' : isOpen ? 'açıqdır' : lastSeen(w.lastOpenedAt)}
-                        </span>
-                      </div>
-                    </button>
+                    <div style={styles.grid}>
+                      {items.map(w => {
+                        const host = w.kind === 'portal' ? (w.portalSite || w.site) : w.site
+                        const isOpen = openLabels.includes(`ws-${w.id}`)
+                        const busy = busyId === w.id
+                        return (
+                          <div key={w.id} style={styles.card}>
+                            <button
+                              style={{ ...styles.cardMain, opacity: busy ? 0.55 : 1 }}
+                              onClick={() => void openWorkspace(w)}
+                              disabled={busy}
+                              title={host}
+                            >
+                              {/* Üz — determinist rəng + monoqram */}
+                              <div style={{ ...styles.cover, background: coverGradient(brandKey(w.site)) }}>
+                                <span style={styles.monogram}>{monogram(w.label || w.site)}</span>
+                                <span style={{
+                                  ...styles.dot,
+                                  background: isOpen ? '#22c55e' : 'rgba(255,255,255,0.55)',
+                                  boxShadow: isOpen ? '0 0 0 3px rgba(34,197,94,0.25)' : 'none',
+                                }} />
+                                {/* 🔴 Kartdakı tərəf etiketi SİLİNDİ — sütun başlığı
+                                    onsuz da deyir. İki yerdə eyni sözü yazmaq
+                                    kartın üzündəki yeri boş yerə tuturdu. */}
+                              </div>
 
-                    <button
-                      style={styles.cardRemove}
-                      title="Siyahıdan sil"
-                      onClick={() => removeWorkspace(w.id)}
-                    >×</button>
-                  </div>
+                              {/* Ünvan zolağı */}
+                              <div style={styles.cardFoot}>
+                                <span style={styles.cardHost}>{w.label || host}</span>
+                                <span style={styles.cardMeta}>
+                                  {busy ? 'açılır…' : isOpen ? 'açıqdır' : lastSeen(w.lastOpenedAt)}
+                                </span>
+                              </div>
+                            </button>
+
+                            <button
+                              style={styles.cardRemove}
+                              title="Siyahıdan sil"
+                              onClick={() => removeWorkspace(w.id)}
+                            >×</button>
+                          </div>
+                        )
+                      })}
+
+                      {/* Sütunun öz əlavəetmə kartı — tərəf əvvəlcədən seçilir */}
+                      <button
+                        style={styles.addCard}
+                        onClick={() => { setError(''); setNewKind(col.kind); setScreen('add') }}
+                      >
+                        <span style={styles.addCardPlus}>+</span>
+                        <span style={styles.addCardText}>
+                          {col.kind === 'portal' ? 'Portal əlavə et' : 'İş sahəsi əlavə et'}
+                        </span>
+                      </button>
+                    </div>
+                  </section>
                 )
               })}
-
-              {/* Əlavəetmə kartı — şəbəkənin təbii sonu */}
-              <button style={styles.addCard} onClick={() => { setError(''); setScreen('add') }}>
-                <span style={styles.addCardPlus}>+</span>
-                <span style={styles.addCardText}>Yeni iş sahəsi</span>
-              </button>
             </div>
           )}
 
@@ -605,6 +640,30 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '22px 20px 28px',
   },
 
+  // ─── İki sütun (45.66) ───
+  columns: {
+    display: 'grid',
+    // Dar pəncərədə (və mobil) alt-alta düşür — sıxılmış iki sütun
+    // 190px-lik kartları oxunmaz edərdi.
+    gridTemplateColumns: IS_MOBILE ? '1fr' : 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 22,
+    alignItems: 'start',
+  },
+  column: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 },
+  colHead: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '0 2px 8px',
+    borderBottom: '1px solid rgba(15,23,42,0.08)',
+  },
+  colDot: { width: 8, height: 8, borderRadius: 999, flexShrink: 0 },
+  colTitle: { fontSize: 13, fontWeight: 700, color: '#0f172a', letterSpacing: -0.1 },
+  colCount: {
+    fontSize: 11, fontWeight: 700, color: '#475569',
+    background: 'rgba(15,23,42,0.06)', borderRadius: 999, padding: '1px 7px',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  colHint: { fontSize: 11, color: '#94a3b8', marginLeft: 'auto', whiteSpace: 'nowrap' },
+
   // ─── Kart şəbəkəsi ───
   grid: {
     display: 'grid',
@@ -649,17 +708,6 @@ const styles: Record<string, React.CSSProperties> = {
     width: 8,
     height: 8,
     borderRadius: '50%',
-  },
-  kindTag: {
-    position: 'absolute',
-    bottom: 8,
-    left: 8,
-    padding: '2.5px 8px',
-    borderRadius: 999,
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 0.2,
   },
   cardFoot: {
     display: 'flex',
