@@ -279,6 +279,24 @@ fn ws_show_launcher(app: tauri::AppHandle) -> Result<(), String> {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+        // 🔴 v0.5.11: FOKUS TƏK BAŞINA BƏS ETMİR.
+        //
+        // v0.5.10-a qədər «main» pəncərəsi HƏMİŞƏ launcher idi, iş sahələri isə
+        // ayrı pəncərələrdə açılırdı — ona görə sadəcə fokuslamaq kifayət edirdi.
+        // v0.5.10-da keçid eyni pəncərədə olmağa başladı, yəni «main» artıq uzaq
+        // ERP səhifəsini göstərə bilər. Nəticədə bu komanda İSTİFADƏÇİNİN ARTIQ
+        // İÇİNDƏ OLDUĞU pəncərəni fokuslayırdı və «düymə heç nə etmir» görünürdü.
+        //
+        // Tray menyusundakı «İş sahələri» bəndi bunu onsuz da düzgün edirdi
+        // (`w.navigate(home)`) — həmin məntiq buraya da gətirildi ki, iki yol
+        // eyni davransın.
+        #[cfg(target_os = "windows")]
+        let home = "http://tauri.localhost/?setup=1";
+        #[cfg(not(target_os = "windows"))]
+        let home = "tauri://localhost/?setup=1";
+        if let Ok(u) = home.parse() {
+            let _ = w.navigate(u);
+        }
         Ok(())
     } else {
         Err("launcher pəncərəsi tapılmadı".into())
@@ -339,6 +357,22 @@ fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), St
         if ws_field(&w, "kind") == "portal" { "Müştəri" } else { "İstifadəçi" }
     );
 
+    /* 🔴 v0.5.11 — WINDOWS AĞ EKRAN DÜZƏLİŞİ.
+       Əvvəl `data_directory(PathBuf::from(&label))` yazılırdı, yəni NİSBİ yol
+       («ws-abc»). WebView2 istifadəçi-data qovluğunu MÜTLƏQ yol kimi gözləyir;
+       nisbi yol prosesin cari qovluğuna görə həll olunur və quraşdırılmış app
+       üçün bu, yazma icazəsi olmayan qovluq olur → WebView2 başlaya bilmir.
+       Pəncərə YARANIR (ona görə aşağıdakı fallback işə düşmür), məzmun isə
+       yüklənmir: istifadəçi DONMUŞ AĞ pəncərə görür.
+       İndi app-ın öz yerli data qovluğunun altında mütləq yol qurulur. */
+    #[cfg(not(target_os = "macos"))]
+    let data_dir: Option<std::path::PathBuf> = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|d| d.join("webviews").join(&label))
+        .inspect(|d| { let _ = std::fs::create_dir_all(d); });
+
     let build = |isolated: bool| -> tauri::Result<tauri::WebviewWindow> {
         let mut b = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url.clone()))
             .title(&title)
@@ -352,7 +386,11 @@ fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), St
             }
             #[cfg(not(target_os = "macos"))]
             {
-                b = b.data_directory(std::path::PathBuf::from(&label));
+                // Mütləq yol alınmasa izolyasiyasız davam edirik — donmuş ağ
+                // pəncərə göstərməkdənsə ümumi sessiya ilə İŞLƏYƏN pəncərə yaxşıdır.
+                if let Some(d) = data_dir.as_ref() {
+                    b = b.data_directory(d.clone());
+                }
             }
         }
         b.build()
