@@ -6,7 +6,7 @@ import {
   addWorkspace, loadWorkspaces, newId, normalizeSite, saveWorkspaces,
   resolveSiteHost, workspaceUrl, type Workspace, type WorkspaceKind,
 } from './workspaces'
-import { isolationFailureReason, isolationSupported, openWorkspaceWindow } from './openWorkspace'
+import { isMac, isolationFailureReason, isolationSupported, openWorkspaceWindow } from './openWorkspace'
 
 /**
  * 🔴 Faza 1.0 (2026-08-14) — İŞ SAHƏSİ (workspace) modeli.
@@ -204,7 +204,30 @@ function App() {
    * `saveWorkspaces([])` yenicə yazılanı SİLİRDİ. Nəticə: istifadəçi ilk iş
    * sahəsini əlavə edir, o dərhal yox olur. (v0.5.0-a bu halda çıxıb.)
    */
-  const openWorkspace = async (w: Workspace, list?: Workspace[]) => {
+  /**
+   * İş sahəsini aç.
+   *
+   * ✅ 45.93 (istifadəçi): «əlavə bir pəncərə açılır target_blank tərzi.
+   * olmazı ki birbaşa davam etsin?»
+   *
+   * İndi ADİ KLİK elə bu pəncərədə davam edir. Ayrı pəncərə yalnız ⌘/Ctrl ilə
+   * klikləyəndə açılır.
+   *
+   * 🔴 NİYƏ HƏR İKİSİ SAXLANILIR — ayrı pəncərə şıltaqlıq deyil, SESSİYA
+   * İZOLYASİYASIDIR: hər pəncərə öz davamlı login qabını alır
+   * (`dataStoreIdentifier`/`dataDirectory`). Eyni pəncərədə davam edəndə
+   * hamısı BİR sessiya qabını bölüşür, yəni işçi paneli ilə müştəri portalında
+   * EYNİ ANDA qalmaq mümkün olmur (Frappe cookie-si origin başınadır — bu,
+   * `workspaces.ts`-də 45.44 şərhində də yazılıb). Kimlik dəyişmirsə eyni
+   * pəncərə heç nə itirmir; iki kimlik lazımdırsa ⌘ ilə aç.
+   *
+   * ⚠️ Bu pəncərə uzaq ERP ünvanına keçəndə launcher React app-ı sökülür.
+   * Geri qayıdış YOLU MÖVCUDDUR: menyu çubuğundakı Olko ikonu → «İş sahələri»
+   * (Rust tərəfdə `tray.on_menu_event` webview-i `?setup=1` ilə app səhifəsinə
+   * qaytarır). Uzaq domendə Tauri IPC olmadığı üçün səhifə daxilindən düymə
+   * qoymaq mümkün deyil — qayıdış native tərəfdən idarə olunur.
+   */
+  const openWorkspace = async (w: Workspace, list?: Workspace[], newWindow = false) => {
     setError('')
     setBusyId(w.id)
     // Son açılış vaxtı — launcher-də sıralama üçün
@@ -213,8 +236,10 @@ function App() {
     setWorkspaces(updated)
     saveWorkspaces(updated)
 
-    if (IS_MOBILE) {
-      window.location.replace(workspaceUrl(w))
+    if (IS_MOBILE || !newWindow) {
+      // `assign` (`replace` yox): launcher tarixçədə qalır, yəni geri
+      // naviqasiyası mümkün olan platformalarda əlavə bir çıxış yolu var.
+      window.location.assign(workspaceUrl(w))
       return
     }
     const r = await openWorkspaceWindow(w)
@@ -403,9 +428,9 @@ function App() {
                           <div key={w.id} style={styles.card}>
                             <button
                               style={{ ...styles.cardMain, opacity: busy ? 0.55 : 1 }}
-                              onClick={() => void openWorkspace(w)}
+                              onClick={(e) => void openWorkspace(w, undefined, e.metaKey || e.ctrlKey)}
                               disabled={busy}
-                              title={host}
+                              title={`${host}\n${isMac() ? '⌘' : 'Ctrl'} + klik — ayrı pəncərədə (iki kimlikdə eyni anda qalmaq üçün)`}
                             >
                               {/* Üz — determinist rəng + monoqram */}
                               <div style={{ ...styles.cover, background: coverGradient(brandKey(w.site)) }}>
@@ -452,6 +477,30 @@ function App() {
                   </section>
                 )
               })}
+            </div>
+          )}
+
+          {!IS_MOBILE && workspaces.length > 0 && (
+            /* ✅ 45.93 — iki şey kəşf edilə bilən olmalıdır:
+               ① adi klik artıq elə bu pəncərədə davam edir, ayrı pəncərə ⌘ ilədir;
+               ② pəncərə uzaq ERP-yə keçəndən sonra launcher React app-ı sökülür və
+                  geri qayıdış YALNIZ native tray menyusundadır — uzaq domendə Tauri
+                  IPC olmadığı üçün səhifə daxilində düymə qoymaq mümkün deyil. */
+            <div style={styles.tips}>
+              {/* 🔴 Platformaya görə AYRI mətn. Funksionallıq hər ikisində eynidir
+                  (tray menyusu `#[cfg(desktop)]` blokundadır və Rust Windows üçün
+                  ayrıca `http://tauri.localhost/?setup=1` ünvanı işlədir), LAKİN
+                  istifadəçiyə verilən təlimat fərqlidir:
+                    macOS   → yuxarıdakı menyu çubuğu, adi klik
+                    Windows → saat yanındakı bildiriş sahəsi, SAĞ klik
+                  «menyu çubuğu» Windows-da ümumiyyətlə yoxdur — ilk yazılışımda
+                  yalnız Mac variantını yazmışdım. */}
+              <span><b>{isMac() ? '⌘' : 'Ctrl'} + klik</b> — ayrı pəncərədə açır (işçi paneli və portalda eyni anda qalmaq üçün).</span>
+              <span>
+                Geri qayıtmaq: {isMac()
+                  ? <>menyu çubuğundakı <b>Olko</b> ikonu → <b>«İş sahələri»</b></>
+                  : <>saat yanındakı <b>Olko</b> ikonuna <b>sağ klik</b> → <b>«İş sahələri»</b></>}.
+              </span>
             </div>
           )}
 
@@ -681,6 +730,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: 'tabular-nums',
   },
   colHint: { fontSize: 11, color: '#94a3b8', marginLeft: 'auto', whiteSpace: 'nowrap' },
+  tips: {
+    display: 'flex', flexDirection: 'column', gap: 4, marginTop: 18,
+    padding: '10px 12px', borderRadius: 10, background: 'rgba(148,163,184,0.10)',
+    border: '1px solid rgba(148,163,184,0.22)', fontSize: 11.5, color: '#64748b',
+  } as React.CSSProperties,
 
   // ─── Kart şəbəkəsi ───
   grid: {
