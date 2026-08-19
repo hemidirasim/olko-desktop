@@ -292,6 +292,129 @@ fn refresh_tray_menu(app: &tauri::AppHandle) {
     }
 }
 
+/// İş sahələri SIDEBAR-ı — hər uzaq səhifəyə Rust-dan yeridilir (v0.5.14).
+///
+/// 🔴 NİYƏ BURADA, ERP KODUNDA YOX (istifadəçi, üçüncü dəqiqləşdirmə):
+/// «dedim sidebarda olsun amma kodda yox, app-ın özündə. sən onu kod ilə
+/// etmişdin, keş zad silməyə məcbur qalırdıq».
+///
+/// Bu skript APP BİNARINDADIR: dəyişiklik app yeniləməsi ilə gəlir, ERP-nin
+/// service worker keşi ona HEÇ CÜR toxuna bilmir (skript uzaq saytdan
+/// verilmir, `on_page_load`-da native tərəfdən eval olunur). Səhifənin CSP-si
+/// də maneə deyil — native `evaluateJavaScript`/`ExecuteScript` CSP-yə tabe
+/// deyil (v0.5.12-dəki CLEAR_CACHE_JS ilə eyni yol, canlıda işlədiyi təsdiqlənib).
+///
+/// DİZAYN (əvvəlki iterasiyaların dərsləri ilə):
+///   • TAM HÜNDÜRLÜK sağ zolaq, ikonlar YUXARIDAN düzülür, siyahı çoxalanda
+///     DAXİLDƏ sürüşür (45.96 tələbi);
+///   • `html.marginRight = 56px` — yığılmış zolaq ÖZ zolağını tutur, məzmunun
+///     üstünə DÜŞMÜR (45.95 şikayəti); hover genişlənməsi müvəqqəti örtmədir;
+///   • Shadow DOM — səhifənin CSS-i zolağı poza bilmir, zolaq da səhifəni;
+///   • adlar `textContent` ilə yazılır (istifadəçi datasıdır — HTML kimi yox);
+///   • idempotent: SPA keçidlərində DOM qalır, tam reload-da yenidən qurulur;
+///   • z-index 40: adi məzmundan üstün, ERP modal/drawer-lərindən (z-50+) altda.
+const SIDEBAR_JS: &str = r##"(()=>{try{
+  if (window.__olkoRail) return;
+  var TAURI = window.__TAURI__ || {};
+  var inv = TAURI.core && TAURI.core.invoke;
+  if (!inv) return;
+  window.__olkoRail = true;
+
+  var W = 56, WOPEN = 264;
+  document.documentElement.style.marginRight = W + 'px';
+
+  var host = document.createElement('div');
+  host.id = 'olko-rail-host';
+  host.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:'+W+'px;z-index:40;';
+  var root = host.attachShadow({mode:'open'});
+  var style = document.createElement('style');
+  style.textContent =
+    '.bar{box-sizing:border-box;height:100%;width:'+W+'px;display:flex;flex-direction:column;' +
+      'background:#fff;border-left:1px solid #e5e7eb;font-family:system-ui,sans-serif;' +
+      'transition:width .18s ease-out;overflow:hidden}' +
+    '.bar.open{width:'+WOPEN+'px;box-shadow:-8px 0 24px rgba(15,23,42,.08)}' +
+    '.list{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0}' +
+    '.it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 11px;border:0;' +
+      'background:transparent;cursor:pointer;text-align:left}' +
+    '.it:hover{background:#f8fafc}.it[disabled]{cursor:default}' +
+    '.ic{position:relative;flex:none;width:34px;height:34px;border-radius:10px;display:flex;' +
+      'align-items:center;justify-content:center;font-size:13px;font-weight:700}' +
+    '.u{background:#eef2ff;color:#4f46e5}.p{background:#ccfbf1;color:#0f766e}' +
+    '.dot{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;' +
+      'background:#10b981;border:2px solid #fff}' +
+    '.tx{min-width:0;flex:1;display:none}.open .tx{display:block}' +
+    '.nm{font-size:12.5px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+    '.kd{font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+    '.ft{flex:none;border-top:1px solid #f1f5f9}';
+  root.appendChild(style);
+
+  var bar = document.createElement('div'); bar.className = 'bar';
+  var list = document.createElement('div'); list.className = 'list';
+  var ft = document.createElement('div'); ft.className = 'ft';
+  bar.appendChild(list); bar.appendChild(ft); root.appendChild(bar);
+
+  function urlOf(w){ return w.kind==='portal' ? 'https://'+(w.portalSite||w.site)+'/portal' : 'https://'+w.site; }
+  function hostOf(w){ return String(w.kind==='portal'?(w.portalSite||w.site):w.site).toLowerCase(); }
+  var here = String(location.host||'').toLowerCase();
+
+  function render(ws){
+    list.textContent = '';
+    ws.sort(function(a,b){ return (b.lastOpenedAt||b.createdAt||0)-(a.lastOpenedAt||a.createdAt||0); });
+    ws.forEach(function(w){
+      var active = hostOf(w) === here;
+      var name = w.label || w.site || '';
+      var kind = w.kind==='portal' ? 'Müştəri' : 'İstifadəçi';
+      var b = document.createElement('button');
+      b.className = 'it'; b.type = 'button';
+      b.title = name + ' — ' + kind + (active ? ' · bu pəncərə' : '');
+      if (active) b.disabled = true;
+      var ic = document.createElement('span');
+      ic.className = 'ic ' + (w.kind==='portal' ? 'p' : 'u');
+      ic.textContent = (name.trim()[0]||'?').toUpperCase();
+      if (active){ var d=document.createElement('span'); d.className='dot'; ic.appendChild(d); }
+      var tx = document.createElement('span'); tx.className='tx';
+      var nm = document.createElement('span'); nm.className='nm'; nm.textContent = name;
+      var kd = document.createElement('span'); kd.className='kd';
+      kd.textContent = kind + (active ? ' · bu pəncərə' : '');
+      tx.appendChild(nm); tx.appendChild(kd);
+      b.appendChild(ic); b.appendChild(tx);
+      b.addEventListener('click', function(e){
+        if (active) return;
+        if (e.metaKey || e.ctrlKey) { inv('ws_open', {workspace: w}); }
+        else { location.assign(urlOf(w)); }
+      });
+      list.appendChild(b);
+    });
+  }
+
+  function load(){
+    inv('ws_list').then(function(l){ if (Array.isArray(l)) render(l); }).catch(function(){});
+  }
+
+  var mg = document.createElement('button');
+  mg.className = 'it'; mg.type = 'button'; mg.title = 'İş sahələrini idarə et';
+  var mic = document.createElement('span'); mic.className='ic'; mic.style.background='#f1f5f9';
+  mic.style.color='#64748b'; mic.textContent='+';
+  var mtx = document.createElement('span'); mtx.className='tx';
+  var mnm = document.createElement('span'); mnm.className='nm'; mnm.textContent='İş sahələri…';
+  mtx.appendChild(mnm);
+  mg.appendChild(mic); mg.appendChild(mtx);
+  mg.addEventListener('click', function(){ inv('ws_show_launcher'); });
+  ft.appendChild(mg);
+
+  var closeT = null;
+  host.addEventListener('mouseenter', function(){
+    if (closeT){ clearTimeout(closeT); closeT = null; }
+    bar.classList.add('open'); host.style.width = WOPEN + 'px'; load();
+  });
+  host.addEventListener('mouseleave', function(){
+    closeT = setTimeout(function(){ bar.classList.remove('open'); host.style.width = W + 'px'; }, 220);
+  });
+
+  load();
+  document.documentElement.appendChild(host);
+}catch(e){}})();"##;
+
 fn ws_store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -515,6 +638,28 @@ fn open_external(url: String) {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init());
+
+    // ✅ v0.5.14 — iş sahələri sidebar-ı UZAQ səhifələrə buradan yeridilir.
+    // Yerli origin-lər (launcher: tauri://localhost, dev: localhost) ötürülür —
+    // launcher-in öz iş sahəsi kartları var, sidebar orada artıqlıq olardı.
+    // 🔴 YALNIZ DESKTOP: bu repo Android app-ı da qurur (gen/android) — qarmaq
+    // şərtsiz olsaydı telefonda da 56px zolaq çıxardı və dar ekranı yeyərdi.
+    #[cfg(desktop)]
+    let builder = builder
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let url = payload.url();
+                let local = url.scheme() == "tauri"
+                    || url
+                        .host_str()
+                        .map(|h| h == "tauri.localhost" || h == "localhost" || h == "127.0.0.1")
+                        .unwrap_or(true);
+                if !local {
+                    let _ = webview.eval(SIDEBAR_JS);
+                }
+            }
+        });
+
 
     // ✅ 2026-07-27: avtomatik yeniləmə (yalnız masaüstü — mobil platformalarda yoxdur).
     // İmza `tauri.conf.json`-dakı açıq açarla yoxlanır → saxta yeniləmə quraşdırıla bilməz.
