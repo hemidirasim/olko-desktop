@@ -197,6 +197,46 @@ fn start_bridge() {
 // origin ayrıdır. Fayl isə hər iki tərəfdən invoke ilə oxunur. Üstəlik
 // localStorage iki dəfə itki verdi (45.41, 45.46) — fayl bərpa mənbəyidir.
 
+/// Webview-də service worker + Cache Storage təmizləyən skript (v0.5.12).
+///
+/// 🔴 NİYƏ NATIVE TƏRƏFDƏ: keşi təmizləyən düymə indiyədək YALNIZ ERP səhifəsinin
+/// içində idi — «bundle ilişib» vəziyyətində onu düzəldən alət də ilişirdi.
+/// Tray bəndi bu asılılığı qırır, ÇÜNKİ düymə köhnə bundle-dan asılı deyil.
+///
+/// ⚠️ DƏQİQLƏŞDİRMƏ (audit): bu, «səhifə hər vəziyyətdə» işləyir demək DEYİL.
+/// `eval` skripti səhifənin ÖZ JS növbəsinə qoyur — səhifə sonsuz döngədə
+/// donubsa, skript də növbədə gözləyir. Həll etdiyi hal: köhnə/nasaz bundle-da
+/// düymənin OLMAMASI, donmuş JS mühərriki yox.
+///
+/// 🔴 OFLAYN QORUMASI (audit tapıntısı, blocker): veb tətbiq PWA-dır —
+/// `vite.config.ts`-də `VitePWA` + precache + `navigateFallback` var, yəni
+/// OFLAYN AÇILIŞI MƏHZ service worker və Cache Storage təmin edir. Oflayn ikən
+/// onları silmək tətbiqi ümumiyyətlə açılmaz edərdi (POS oflayn satış!).
+/// Ona görə oflayn halda yalnız reload olunur, təmizləmə edilmir.
+///
+/// 🔴 `clear_all_browsing_data()` QƏSDƏN İŞLƏDİLMİR — cookie-ləri də silir,
+/// yəni istifadəçini bütün iş sahələrindən çıxarardı.
+///
+/// 🔴 VAXT LİMİTİ: `await` PENDING promise-i əbədi gözləyir və `try/catch` onu
+/// TUTMUR (yalnız reject-i tutur). `unregister()` ilişsə reload heç vaxt
+/// işləməzdi — yəni bənd «heç nə etmir» görünərdi. Hər addım 2.5 san ilə
+/// yarışdırılır, reload isə `finally`-dədir: HƏMİŞƏ icra olunur.
+const CLEAR_CACHE_JS: &str = r#"(async()=>{
+  const t=ms=>new Promise(r=>setTimeout(r,ms));
+  const race=p=>Promise.race([Promise.resolve(p).catch(()=>{}),t(2500)]);
+  try{
+    if(navigator.onLine){
+      if(navigator.serviceWorker&&navigator.serviceWorker.getRegistrations){
+        await race(navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))));
+      }
+      if(window.caches&&caches.keys){
+        await race(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))));
+      }
+    }
+  }catch(e){}
+  finally{ try{ location.reload(); }catch(e){} }
+})();"#;
+
 fn ws_store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -468,12 +508,37 @@ pub fn run() {
                     //    (workspace) siyahısı var. Etiket «Saytı dəyiş» yanıldıcı
                     //    olardı: bu düymə heç nə silmir, sadəcə LAUNCHER-i qaytarır.
                     let reset = MenuItemBuilder::with_id("reset_site", "İş sahələri").build(app)?;
+                    // ✅ v0.5.12 (istifadəçi: «bəs o düyməni Tauri-nin özündə edə bilməzsən?»)
+                    // Səbəb: veb tərəfdəki «Keşi təmizlə» düyməsi köhnə bundle-ın İÇİNDƏDİR.
+                    let clear = MenuItemBuilder::with_id("clear_cache", "Keşi təmizlə (səhifəni yenilə)").build(app)?;
                     let quit = MenuItemBuilder::with_id("quit_app", "Proqramdan çıx").build(app)?;
-                    let menu = MenuBuilder::new(app).items(&[&reset, &quit]).build()?;
+                    let menu = MenuBuilder::new(app).items(&[&reset, &clear, &quit]).build()?;
                     if let Some(tray) = app.tray_by_id("main-tray") {
                         let _ = tray.set_menu(Some(menu));
                         let h = app.handle().clone();
                         tray.on_menu_event(move |_tray, event| match event.id().as_ref() {
+                            "clear_cache" => {
+                                // 🔴 YALNIZ FOKUSDAKİ pəncərə (audit tapıntısı, blocker).
+                                // Əvvəl BÜTÜN pəncərələrə tətbiq olunurdu. Bu qabıqda
+                                // `beforeunload` dialoqu GÖSTƏRİLMİR (wry WKUIDelegate-də
+                                // müvafiq metod yoxdur), yəni fon pəncərəsindəki
+                                // saxlanmamış iş XƏBƏRDARLIQSIZ itərdi — məsələn POS
+                                // səbəti hələ React state-də ola bilər.
+                                // Fokusda pəncərə yoxdursa (tray-ə arxa fondan basılıb)
+                                // `main`-ə düşürük.
+                                let target = h
+                                    .webview_windows()
+                                    .into_values()
+                                    .find(|w| w.is_focused().unwrap_or(false))
+                                    .or_else(|| h.get_webview_window("main"));
+                                if let Some(w) = target {
+                                    if let Err(e) = w.eval(CLEAR_CACHE_JS) {
+                                        log::warn!("clear_cache eval xətası [{}]: {e}", w.label());
+                                    }
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                            }
                             "reset_site" => {
                                 if let Some(w) = h.get_webview_window("main") {
                                     let _ = w.show();
