@@ -237,6 +237,61 @@ const CLEAR_CACHE_JS: &str = r#"(async()=>{
   finally{ try{ location.reload(); }catch(e){} }
 })();"#;
 
+/// Tray menyusunu iş sahələri ilə birlikdə qurur (v0.5.13).
+///
+/// 🔴 NİYƏ NATIVE (istifadəçi qərarı): iş sahələri siyahısı əvvəl ERP səhifəsində
+/// üzən React komponenti idi. İki problemi var idi:
+///   ① hər dəyişiklik veb deploy + KEŞ TƏMİZLƏMƏ tələb edirdi — istifadəçi:
+///      «app yenilənməsi ilə gəlməli idi bu funksiya»;
+///   ② üzən element səhifə məzmununun ÜSTÜNƏ düşürdü.
+/// Native menyu hər ikisini həll edir: app yeniləməsi ilə gəlir və heç nəyi örtmür.
+///
+/// Menyu SONRADAN yenidən qurula bilir (`tray.set_menu`) — `ws_save` çağırılanda
+/// yenilənir, yəni launcher-də iş sahəsi əlavə edilən kimi menyuda görünür.
+fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+
+    let list = ws_read(app);
+    let mut owned: Vec<tauri::menu::MenuItem<tauri::Wry>> = Vec::new();
+    for w in &list {
+        let id = ws_field(w, "id");
+        if id.is_empty() {
+            continue;
+        }
+        let name = {
+            let l = ws_field(w, "label");
+            if l.is_empty() { ws_field(w, "site") } else { l }
+        };
+        let kind = if ws_field(w, "kind") == "portal" { "Müştəri" } else { "İstifadəçi" };
+        owned.push(
+            MenuItemBuilder::with_id(format!("ws:{id}"), format!("{name} — {kind}")).build(app)?,
+        );
+    }
+
+    let reset = MenuItemBuilder::with_id("reset_site", "İş sahələri…").build(app)?;
+    let clear = MenuItemBuilder::with_id("clear_cache", "Keşi təmizlə (səhifəni yenilə)").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit_app", "Proqramdan çıx").build(app)?;
+
+    let mut b = MenuBuilder::new(app);
+    for it in &owned {
+        b = b.item(it);
+    }
+    if !owned.is_empty() {
+        b = b.separator();
+    }
+    b.items(&[&reset, &clear, &quit]).build()
+}
+
+/// Tray menyusunu yenidən qurub tətbiq edir (siyahı dəyişəndən sonra).
+fn refresh_tray_menu(app: &tauri::AppHandle) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        match build_tray_menu(app) {
+            Ok(menu) => { let _ = tray.set_menu(Some(menu)); }
+            Err(e) => log::warn!("tray menyusu yenilənmədi: {e}"),
+        }
+    }
+}
+
 fn ws_store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -310,7 +365,11 @@ fn ws_list(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn ws_save(app: tauri::AppHandle, list: Vec<serde_json::Value>) -> Result<(), String> {
-    ws_write(&app, &list)
+    ws_write(&app, &list)?;
+    // ✅ v0.5.13: siyahı dəyişən kimi tray menyusu yenilənir — əks halda yeni iş
+    // sahəsi yalnız proqram yenidən açılandan sonra menyuda görünərdi.
+    refresh_tray_menu(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -503,20 +562,39 @@ pub fn run() {
                 // ✅ Tray menyusu: app-daxili header götürüldüyü üçün sayt dəyişmə/çıxış
                 // əməliyyatları buradan əlçatandır (sağ klik → menyu).
                 {
-                    use tauri::menu::{MenuBuilder, MenuItemBuilder};
-                    // 🔴 Faza 1.0: app artıq tək sayta bağlı deyil — iş sahələri
-                    //    (workspace) siyahısı var. Etiket «Saytı dəyiş» yanıldıcı
-                    //    olardı: bu düymə heç nə silmir, sadəcə LAUNCHER-i qaytarır.
-                    let reset = MenuItemBuilder::with_id("reset_site", "İş sahələri").build(app)?;
-                    // ✅ v0.5.12 (istifadəçi: «bəs o düyməni Tauri-nin özündə edə bilməzsən?»)
-                    // Səbəb: veb tərəfdəki «Keşi təmizlə» düyməsi köhnə bundle-ın İÇİNDƏDİR.
-                    let clear = MenuItemBuilder::with_id("clear_cache", "Keşi təmizlə (səhifəni yenilə)").build(app)?;
-                    let quit = MenuItemBuilder::with_id("quit_app", "Proqramdan çıx").build(app)?;
-                    let menu = MenuBuilder::new(app).items(&[&reset, &clear, &quit]).build()?;
+                    // ✅ v0.5.13: menyu İŞ SAHƏLƏRİ ilə birlikdə qurulur (bax
+                    // `build_tray_menu`). Siyahı dəyişəndə `ws_save` onu yeniləyir.
+                    let menu = build_tray_menu(&app.handle().clone())?;
                     if let Some(tray) = app.tray_by_id("main-tray") {
                         let _ = tray.set_menu(Some(menu));
                         let h = app.handle().clone();
-                        tray.on_menu_event(move |_tray, event| match event.id().as_ref() {
+                        tray.on_menu_event(move |_tray, event| {
+                          let raw = event.id().as_ref().to_string();
+                          // 🔴 İş sahəsi bəndləri `ws:<id>` prefiksi ilə gəlir — sabit
+                          // `match` qollarından ƏVVƏL yoxlanır.
+                          if let Some(ws_id) = raw.strip_prefix("ws:") {
+                              if let Some(w) = ws_read(&h).into_iter().find(|x| ws_field(x, "id") == ws_id) {
+                                  if let Ok(url) = ws_url(&w).parse::<tauri::Url>() {
+                                      // Eyni pəncərədə davam (v0.5.10 qərarı):
+                                      // fokusdakı, yoxdursa `main`.
+                                      let target = h
+                                          .webview_windows()
+                                          .into_values()
+                                          .find(|x| x.is_focused().unwrap_or(false))
+                                          .or_else(|| h.get_webview_window("main"));
+                                      if let Some(win) = target {
+                                          let _ = win.show();
+                                          let _ = win.unminimize();
+                                          let _ = win.set_focus();
+                                          if let Err(e) = win.navigate(url) {
+                                              log::warn!("iş sahəsinə keçid alınmadı [{ws_id}]: {e}");
+                                          }
+                                      }
+                                  }
+                              }
+                              return;
+                          }
+                          match raw.as_str() {
                             "clear_cache" => {
                                 // 🔴 YALNIZ FOKUSDAKİ pəncərə (audit tapıntısı, blocker).
                                 // Əvvəl BÜTÜN pəncərələrə tətbiq olunurdu. Bu qabıqda
@@ -557,6 +635,7 @@ pub fn run() {
                             }
                             "quit_app" => h.exit(0),
                             _ => {}
+                          }
                         });
                     }
                 }
