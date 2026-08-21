@@ -35,5 +35,9 @@
     "allow-ws-list",
     "allow-ws-open",
     "allow-ws-show-launcher"
+  ],
+  "webviews": [
+    "content",
+    "ws-*"
   ]
 }

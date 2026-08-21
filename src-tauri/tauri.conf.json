@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Olko ERP",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "identifier": "com.olkoerp.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -11,29 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Olko ERP",
-        "width": 1440,
-        "height": 900,
-        "resizable": true,
-        "decorations": true,
-        "center": true,
-        "alwaysOnTop": false,
-        "skipTaskbar": false,
-        "visible": true,
-        "transparent": false,
-        "shadow": true,
-        "minWidth": 1024,
-        "minHeight": 700,
-        "maximizable": true,
-        "minimizable": true,
-        "closable": true,
-        "fullscreen": false,
-        "maximized": true
-      }
-    ],
+    "windows": [],
     "trayIcon": {
       "id": "main-tray",
       "iconPath": "icons/32x32.png",

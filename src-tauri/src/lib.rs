@@ -292,128 +292,55 @@ fn refresh_tray_menu(app: &tauri::AppHandle) {
     }
 }
 
-/// İş sahələri SIDEBAR-ı — hər uzaq səhifəyə Rust-dan yeridilir (v0.5.14).
-///
-/// 🔴 NİYƏ BURADA, ERP KODUNDA YOX (istifadəçi, üçüncü dəqiqləşdirmə):
-/// «dedim sidebarda olsun amma kodda yox, app-ın özündə. sən onu kod ilə
-/// etmişdin, keş zad silməyə məcbur qalırdıq».
-///
-/// Bu skript APP BİNARINDADIR: dəyişiklik app yeniləməsi ilə gəlir, ERP-nin
-/// service worker keşi ona HEÇ CÜR toxuna bilmir (skript uzaq saytdan
-/// verilmir, `on_page_load`-da native tərəfdən eval olunur). Səhifənin CSP-si
-/// də maneə deyil — native `evaluateJavaScript`/`ExecuteScript` CSP-yə tabe
-/// deyil (v0.5.12-dəki CLEAR_CACHE_JS ilə eyni yol, canlıda işlədiyi təsdiqlənib).
-///
-/// DİZAYN (əvvəlki iterasiyaların dərsləri ilə):
-///   • TAM HÜNDÜRLÜK sağ zolaq, ikonlar YUXARIDAN düzülür, siyahı çoxalanda
-///     DAXİLDƏ sürüşür (45.96 tələbi);
-///   • `html.marginRight = 56px` — yığılmış zolaq ÖZ zolağını tutur, məzmunun
-///     üstünə DÜŞMÜR (45.95 şikayəti); hover genişlənməsi müvəqqəti örtmədir;
-///   • Shadow DOM — səhifənin CSS-i zolağı poza bilmir, zolaq da səhifəni;
-///   • adlar `textContent` ilə yazılır (istifadəçi datasıdır — HTML kimi yox);
-///   • idempotent: SPA keçidlərində DOM qalır, tam reload-da yenidən qurulur;
-///   • z-index 40: adi məzmundan üstün, ERP modal/drawer-lərindən (z-50+) altda.
-const SIDEBAR_JS: &str = r##"(()=>{try{
-  if (window.__olkoRail) return;
-  var TAURI = window.__TAURI__ || {};
-  var inv = TAURI.core && TAURI.core.invoke;
-  if (!inv) return;
-  window.__olkoRail = true;
+// ═════════════════════════════════════════════════════════════════
+// İŞ SAHƏLƏRİ PANELİ — AYRICA NATIVE WEBVIEW (v0.5.15, multi-webview)
+// ═════════════════════════════════════════════════════════════════
+// 🔴 NİYƏ BELƏ (istifadəçi, dördüncü iterasiya): v0.5.14-də panel uzaq
+// səhifəyə JS ilə yeridilirdi və `position:fixed` elementlər (tapşırıq
+// çəkməcəsi, modallar) `html.marginRight`-ə tabe olmadığı üçün panelin
+// ALTINA girirdi. İndi pəncərə NATIVE səviyyədə iki webview-ə bölünür:
+//   • «content» — launcher/ERP (eni = pəncərə − 56px);
+//   • «rail»    — public/rail.html (sabit 56px, hover-də 264px-ə genişlənir).
+// Üst-üstə düşmə fiziki mümkün deyil: ERP öz webview-inin sərhədini görmür.
+// Genişlənmiş hal QƏSDƏN örtmədir (müvəqqəti hover) — rail sonradan əlavə
+// olunduğu üçün native qatda üstdədir.
+// Tələb: tauri "unstable" feature (Window::add_child).
 
-  var W = 56, WOPEN = 264;
-  document.documentElement.style.marginRight = W + 'px';
+#[cfg(desktop)]
+const RAIL_W: f64 = 56.0;
 
-  var host = document.createElement('div');
-  host.id = 'olko-rail-host';
-  host.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:'+W+'px;z-index:40;';
-  var root = host.attachShadow({mode:'open'});
-  var style = document.createElement('style');
-  style.textContent =
-    '.bar{box-sizing:border-box;height:100%;width:'+W+'px;display:flex;flex-direction:column;' +
-      'background:#fff;border-left:1px solid #e5e7eb;font-family:system-ui,sans-serif;' +
-      'transition:width .18s ease-out;overflow:hidden}' +
-    '.bar.open{width:'+WOPEN+'px;box-shadow:-8px 0 24px rgba(15,23,42,.08)}' +
-    '.list{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0}' +
-    '.it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 11px;border:0;' +
-      'background:transparent;cursor:pointer;text-align:left}' +
-    '.it:hover{background:#f8fafc}.it[disabled]{cursor:default}' +
-    '.ic{position:relative;flex:none;width:34px;height:34px;border-radius:10px;display:flex;' +
-      'align-items:center;justify-content:center;font-size:13px;font-weight:700}' +
-    '.u{background:#eef2ff;color:#4f46e5}.p{background:#ccfbf1;color:#0f766e}' +
-    '.dot{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;' +
-      'background:#10b981;border:2px solid #fff}' +
-    '.tx{min-width:0;flex:1;display:none}.open .tx{display:block}' +
-    '.nm{font-size:12.5px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-    '.kd{font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-    '.ft{flex:none;border-top:1px solid #f1f5f9}';
-  root.appendChild(style);
+#[cfg(desktop)]
+static RAIL_CUR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(56);
 
-  var bar = document.createElement('div'); bar.className = 'bar';
-  var list = document.createElement('div'); list.className = 'list';
-  var ft = document.createElement('div'); ft.className = 'ft';
-  bar.appendChild(list); bar.appendChild(ft); root.appendChild(bar);
+/// content+rail webview-lərini pəncərə ölçüsünə görə düz (resize + hover-genişlənmə).
+#[cfg(desktop)]
+fn layout_main(app: &tauri::AppHandle, rail_w: f64) {
+    let Some(win) = app.get_window("main") else { return };
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let Ok(size) = win.inner_size() else { return };
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    if let Some(content) = app.get_webview("content") {
+        let _ = content.set_position(tauri::LogicalPosition::new(0.0, 0.0));
+        let _ = content.set_size(tauri::LogicalSize::new((w - RAIL_W).max(200.0), h));
+    }
+    if let Some(rail) = app.get_webview("rail") {
+        let _ = rail.set_position(tauri::LogicalPosition::new((w - rail_w).max(0.0), 0.0));
+        let _ = rail.set_size(tauri::LogicalSize::new(rail_w.min(w), h));
+    }
+}
 
-  function urlOf(w){ return w.kind==='portal' ? 'https://'+(w.portalSite||w.site)+'/portal' : 'https://'+w.site; }
-  function hostOf(w){ return String(w.kind==='portal'?(w.portalSite||w.site):w.site).toLowerCase(); }
-  var here = String(location.host||'').toLowerCase();
-
-  function render(ws){
-    list.textContent = '';
-    ws.sort(function(a,b){ return (b.lastOpenedAt||b.createdAt||0)-(a.lastOpenedAt||a.createdAt||0); });
-    ws.forEach(function(w){
-      var active = hostOf(w) === here;
-      var name = w.label || w.site || '';
-      var kind = w.kind==='portal' ? 'Müştəri' : 'İstifadəçi';
-      var b = document.createElement('button');
-      b.className = 'it'; b.type = 'button';
-      b.title = name + ' — ' + kind + (active ? ' · bu pəncərə' : '');
-      if (active) b.disabled = true;
-      var ic = document.createElement('span');
-      ic.className = 'ic ' + (w.kind==='portal' ? 'p' : 'u');
-      ic.textContent = (name.trim()[0]||'?').toUpperCase();
-      if (active){ var d=document.createElement('span'); d.className='dot'; ic.appendChild(d); }
-      var tx = document.createElement('span'); tx.className='tx';
-      var nm = document.createElement('span'); nm.className='nm'; nm.textContent = name;
-      var kd = document.createElement('span'); kd.className='kd';
-      kd.textContent = kind + (active ? ' · bu pəncərə' : '');
-      tx.appendChild(nm); tx.appendChild(kd);
-      b.appendChild(ic); b.appendChild(tx);
-      b.addEventListener('click', function(e){
-        if (active) return;
-        if (e.metaKey || e.ctrlKey) { inv('ws_open', {workspace: w}); }
-        else { location.assign(urlOf(w)); }
-      });
-      list.appendChild(b);
-    });
-  }
-
-  function load(){
-    inv('ws_list').then(function(l){ if (Array.isArray(l)) render(l); }).catch(function(){});
-  }
-
-  var mg = document.createElement('button');
-  mg.className = 'it'; mg.type = 'button'; mg.title = 'İş sahələrini idarə et';
-  var mic = document.createElement('span'); mic.className='ic'; mic.style.background='#f1f5f9';
-  mic.style.color='#64748b'; mic.textContent='+';
-  var mtx = document.createElement('span'); mtx.className='tx';
-  var mnm = document.createElement('span'); mnm.className='nm'; mnm.textContent='İş sahələri…';
-  mtx.appendChild(mnm);
-  mg.appendChild(mic); mg.appendChild(mtx);
-  mg.addEventListener('click', function(){ inv('ws_show_launcher'); });
-  ft.appendChild(mg);
-
-  var closeT = null;
-  host.addEventListener('mouseenter', function(){
-    if (closeT){ clearTimeout(closeT); closeT = null; }
-    bar.classList.add('open'); host.style.width = WOPEN + 'px'; load();
-  });
-  host.addEventListener('mouseleave', function(){
-    closeT = setTimeout(function(){ bar.classList.remove('open'); host.style.width = W + 'px'; }, 220);
-  });
-
-  load();
-  document.documentElement.appendChild(host);
-}catch(e){}})();"##;
+/// «main» pəncərəsində naviqasiya olunan webview. Multi-webview quruluşunda
+/// pəncərə «main», məzmun webview-i isə «content» adlanır; ws-* pəncərələri
+/// tək-webview qaldığı üçün onların webview etiketi pəncərə etiketi ilə eynidir.
+#[cfg(desktop)]
+fn content_webview_of(app: &tauri::AppHandle, window_label: &str) -> Option<tauri::Webview<tauri::Wry>> {
+    if window_label == "main" {
+        app.get_webview("content")
+    } else {
+        app.get_webview(window_label)
+    }
+}
 
 fn ws_store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -496,8 +423,66 @@ fn ws_save(app: tauri::AppHandle, list: Vec<serde_json::Value>) -> Result<(), St
 }
 
 #[tauri::command]
+fn rail_set_width(app: tauri::AppHandle, width: f64) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        let w = width.clamp(RAIL_W, 320.0);
+        RAIL_CUR.store(w as u32, std::sync::atomic::Ordering::Relaxed);
+        layout_main(&app, w);
+    }
+    #[cfg(not(desktop))]
+    let _ = (app, width);
+    Ok(())
+}
+
+/// Rail «hansı sahə aktivdir» nöqtəsini göstərmək üçün content webview-inin hostu.
+#[tauri::command]
+fn ws_current(app: tauri::AppHandle) -> String {
+    #[cfg(desktop)]
+    {
+        return app
+            .get_webview("content")
+            .and_then(|wv| wv.url().ok())
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+            .unwrap_or_default();
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        String::new()
+    }
+}
+
+/// Eyni pəncərədə iş sahəsinə keçid (rail-dən): upsert + content naviqasiyası.
+/// ⌘-klik ayrıca pəncərə istəyəndə rail `ws_open` çağırır (aşağıda).
+#[tauri::command]
+fn ws_activate(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        let w = ws_upsert(&app, workspace)?;
+        let url: tauri::Url = ws_url(&w).parse().map_err(|e| format!("{e}"))?;
+        let wv = app
+            .get_webview("content")
+            .ok_or_else(|| "content webview tapılmadı".to_string())?;
+        wv.navigate(url).map_err(|e| e.to_string())?;
+        if let Some(win) = app.get_window("main") {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        Ok(())
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, workspace);
+        Err("yalnız masaüstü".into())
+    }
+}
+
+#[tauri::command]
 fn ws_show_launcher(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("main") {
+    // v0.5.15: «main» artıq multi-webview PƏNCƏRƏDİR — görünüş pəncərəyə,
+    // naviqasiya isə «content» webview-inə gedir.
+    if let Some(w) = app.get_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -517,7 +502,9 @@ fn ws_show_launcher(app: tauri::AppHandle) -> Result<(), String> {
         #[cfg(not(target_os = "windows"))]
         let home = "tauri://localhost/?setup=1";
         if let Ok(u) = home.parse() {
-            let _ = w.navigate(u);
+            if let Some(wv) = app.get_webview("content") {
+                let _ = wv.navigate(u);
+            }
         }
         Ok(())
     } else {
@@ -528,8 +515,9 @@ fn ws_show_launcher(app: tauri::AppHandle) -> Result<(), String> {
 /// İş sahəsini aç (varsa önə gətir). `workspace` TAM OBYEKT gəlir — fayla
 /// upsert edilir, sonra açılır. Ona görə launcher-in async yazısını
 /// gözləmək lazım gəlmir və fayl həmişə aktual qalır.
-#[tauri::command]
-fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+/// Doğrulama + fayla upsert (lastOpenedAt ilə). `ws_open` və `ws_activate`
+/// üçün TƏK MƏNBƏ — iki yol ayrılsa siyahı davranışı da ayrılar.
+fn ws_upsert(app: &tauri::AppHandle, workspace: serde_json::Value) -> Result<serde_json::Value, String> {
     let id = ws_field(&workspace, "id").to_string();
     if id.is_empty() {
         return Err("id boşdur".into());
@@ -544,13 +532,12 @@ fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), St
         return Err("site boşdur".into());
     }
 
-    // Upsert + lastOpenedAt
-    let mut list = ws_read(&app);
+    let mut list = ws_read(app);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let mut w = workspace.clone();
+    let mut w = workspace;
     if let Some(obj) = w.as_object_mut() {
         obj.insert("lastOpenedAt".into(), serde_json::json!(now));
     }
@@ -559,7 +546,14 @@ fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), St
     } else {
         list.push(w.clone());
     }
-    let _ = ws_write(&app, &list);
+    let _ = ws_write(app, &list);
+    Ok(w)
+}
+
+#[tauri::command]
+fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    let w = ws_upsert(&app, workspace)?;
+    let id = ws_field(&w, "id").to_string();
 
     let label = ws_label(&id);
     if let Some(existing) = app.get_webview_window(&label) {
@@ -639,26 +633,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init());
 
-    // ✅ v0.5.14 — iş sahələri sidebar-ı UZAQ səhifələrə buradan yeridilir.
-    // Yerli origin-lər (launcher: tauri://localhost, dev: localhost) ötürülür —
-    // launcher-in öz iş sahəsi kartları var, sidebar orada artıqlıq olardı.
-    // 🔴 YALNIZ DESKTOP: bu repo Android app-ı da qurur (gen/android) — qarmaq
-    // şərtsiz olsaydı telefonda da 56px zolaq çıxardı və dar ekranı yeyərdi.
-    #[cfg(desktop)]
-    let builder = builder
-        .on_page_load(|webview, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                let url = payload.url();
-                let local = url.scheme() == "tauri"
-                    || url
-                        .host_str()
-                        .map(|h| h == "tauri.localhost" || h == "localhost" || h == "127.0.0.1")
-                        .unwrap_or(true);
-                if !local {
-                    let _ = webview.eval(SIDEBAR_JS);
-                }
-            }
-        });
+    // (v0.5.15: səhifəyə JS yeridilməsi LƏĞV EDİLDİ — panel ayrıca native
+    //  webview-dədir, bax RAIL bölməsi. on_page_load qarmağı silindi.)
 
 
     // ✅ 2026-07-27: avtomatik yeniləmə (yalnız masaüstü — mobil platformalarda yoxdur).
@@ -683,24 +659,52 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                // ✅ 2026-07-27: pəncərəni ekranın SAĞ kənarına yerləşdirən blok SİLİNDİ.
-                // Bubble dövründən qalmışdı və sabit 424×644 ölçüləri ilə hesablayırdı →
-                // konfiqdəki `center: true` / `maximized: true` heç bir təsir göstərmirdi
-                // ("proqram hər dəfə sağda açılır"). İndi mövqeyi OS/konfiq idarə edir.
+                // ✅ v0.5.15 — MAIN PƏNCƏRƏSİ KODDAN QURULUR (multi-webview):
+                // konfiqdəki windows[] boşdur; «content» (launcher/ERP) + «rail»
+                // (iş sahələri paneli) native olaraq yan-yana yerləşir. Panel
+                // məzmunun üstünə düşə bilməz — bu, 45.95→v0.5.14 iterasiyalarının
+                // kök həllidir (istifadəçi: «tauri-nin daxilində olsun»).
+                {
+                    use tauri::webview::WebviewBuilder;
+                    use tauri::{LogicalPosition, LogicalSize, WebviewUrl};
 
-                // System tray click -> toggle window
-                // ✅ 2026-07-27 (macOS davranışı): qırmızı X pəncərəni GİZLƏDİR, proqramı
-                // bağlamır — Dock ikonu qalır, ⌘Tab-da görünür (adi Mac proqramı kimi).
-                // Əvvəl X proqramı tam söndürürdü və Dock-dan itirdi.
-                // Tam çıxış: ⌘Q və ya tray → "Proqramdan çıx".
-                #[cfg(target_os = "macos")]
-                if let Some(window) = app.get_webview_window("main") {
-                    let w = window.clone();
-                    window.on_window_event(move |event| {
+                    let win = tauri::window::WindowBuilder::new(app, "main")
+                        .title("Olko ERP")
+                        .inner_size(1440.0, 900.0)
+                        .min_inner_size(1024.0, 700.0)
+                        .center()
+                        .build()?;
+                    let scale = win.scale_factor().unwrap_or(1.0);
+                    let size = win.inner_size()?;
+                    let w = size.width as f64 / scale;
+                    let h = size.height as f64 / scale;
+                    win.add_child(
+                        WebviewBuilder::new("content", WebviewUrl::App("index.html".into())),
+                        LogicalPosition::new(0.0, 0.0),
+                        LogicalSize::new((w - RAIL_W).max(200.0), h),
+                    )?;
+                    // rail SONRA əlavə olunur → native qatda üstdədir (hover genişlənməsi)
+                    win.add_child(
+                        WebviewBuilder::new("rail", WebviewUrl::App("rail.html".into())),
+                        LogicalPosition::new(w - RAIL_W, 0.0),
+                        LogicalSize::new(RAIL_W, h),
+                    )?;
+
+                    let wh = app.handle().clone();
+                    let wv = win.clone();
+                    win.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Resized(_)) {
+                            let rw = RAIL_CUR.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                            layout_main(&wh, rw);
+                        }
+                        // macOS: qırmızı X GİZLƏDİR (Dock-da qalır) — köhnə davranış qorunur
+                        #[cfg(target_os = "macos")]
                         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                             api.prevent_close();
-                            let _ = w.hide();
+                            let _ = wv.hide();
                         }
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = &wv;
                     });
                 }
 
@@ -722,17 +726,24 @@ pub fn run() {
                                   if let Ok(url) = ws_url(&w).parse::<tauri::Url>() {
                                       // Eyni pəncərədə davam (v0.5.10 qərarı):
                                       // fokusdakı, yoxdursa `main`.
+                                      // v0.5.15: «main» WebviewWindow deyil — pəncərələr
+                                      // üzərində gəzib naviqasiyanı müvafiq WEBVIEW-ə veririk.
                                       let target = h
-                                          .webview_windows()
+                                          .windows()
                                           .into_values()
                                           .find(|x| x.is_focused().unwrap_or(false))
-                                          .or_else(|| h.get_webview_window("main"));
+                                          .or_else(|| h.get_window("main"));
                                       if let Some(win) = target {
                                           let _ = win.show();
                                           let _ = win.unminimize();
                                           let _ = win.set_focus();
-                                          if let Err(e) = win.navigate(url) {
-                                              log::warn!("iş sahəsinə keçid alınmadı [{ws_id}]: {e}");
+                                          match content_webview_of(&h, win.label()) {
+                                              Some(wv) => {
+                                                  if let Err(e) = wv.navigate(url) {
+                                                      log::warn!("iş sahəsinə keçid alınmadı [{ws_id}]: {e}");
+                                                  }
+                                              }
+                                              None => log::warn!("webview tapılmadı [{}]", win.label()),
                                           }
                                       }
                                   }
@@ -750,20 +761,22 @@ pub fn run() {
                                 // Fokusda pəncərə yoxdursa (tray-ə arxa fondan basılıb)
                                 // `main`-ə düşürük.
                                 let target = h
-                                    .webview_windows()
+                                    .windows()
                                     .into_values()
                                     .find(|w| w.is_focused().unwrap_or(false))
-                                    .or_else(|| h.get_webview_window("main"));
+                                    .or_else(|| h.get_window("main"));
                                 if let Some(w) = target {
-                                    if let Err(e) = w.eval(CLEAR_CACHE_JS) {
-                                        log::warn!("clear_cache eval xətası [{}]: {e}", w.label());
+                                    if let Some(wv) = content_webview_of(&h, w.label()) {
+                                        if let Err(e) = wv.eval(CLEAR_CACHE_JS) {
+                                            log::warn!("clear_cache eval xətası [{}]: {e}", w.label());
+                                        }
                                     }
                                     let _ = w.show();
                                     let _ = w.set_focus();
                                 }
                             }
                             "reset_site" => {
-                                if let Some(w) = h.get_webview_window("main") {
+                                if let Some(w) = h.get_window("main") {
                                     let _ = w.show();
                                     let _ = w.set_focus();
                                     // ⚠️ ERP uzaq domenində Tauri IPC yoxdur → hadisə yayımlamaq
@@ -774,7 +787,9 @@ pub fn run() {
                                     #[cfg(not(target_os = "windows"))]
                                     let home = "tauri://localhost/?setup=1";
                                     if let Ok(u) = home.parse() {
-                                        let _ = w.navigate(u);
+                                        if let Some(wv) = h.get_webview("content") {
+                                            let _ = wv.navigate(u);
+                                        }
                                     }
                                 }
                             }
@@ -789,7 +804,7 @@ pub fn run() {
                 if let Some(tray) = app.tray_by_id("main-tray") {
                     tray.on_tray_icon_event(move |_tray, event| {
                         if let TrayIconEvent::Click { .. } = event {
-                            if let Some(window) = handle.get_webview_window("main") {
+                            if let Some(window) = handle.get_window("main") {
                                 if window.is_visible().unwrap_or(false) {
                                     let _ = window.hide();
                                 } else {
@@ -802,6 +817,18 @@ pub fn run() {
                 }
             }
 
+            #[cfg(mobile)]
+            {
+                // Konfiqdəki windows[] boşdur (desktop multi-webview üçün) —
+                // mobil pəncərə burada adi tək-webview kimi qurulur.
+                tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .build()?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -812,7 +839,10 @@ pub fn run() {
             ws_list,
             ws_save,
             ws_open,
-            ws_show_launcher
+            ws_show_launcher,
+            ws_activate,
+            ws_current,
+            rail_set_width
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -821,7 +851,7 @@ pub fn run() {
             // Bu olmasa X-dən sonra Dock ikonu işə yaramır (pəncərə bir daha açılmır).
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = _event {
-                if let Some(w) = _app.get_webview_window("main") {
+                if let Some(w) = _app.get_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
                 }

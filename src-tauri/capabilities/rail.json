@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "rail",
+  "description": "İş sahələri paneli (native rail webview). Remote bloku QƏSDƏN yoxdur — bu icazələr yalnız app-ın öz rail.html səhifəsinə aiddir.",
+  "windows": [
+    "main"
+  ],
+  "webviews": [
+    "rail"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-ws-list",
+    "allow-ws-open",
+    "allow-ws-activate",
+    "allow-ws-current",
+    "allow-ws-show-launcher",
+    "allow-rail-set-width"
+  ]
+}

@@ -1,0 +1,103 @@
+<!doctype html>
+<!-- İş sahələri paneli — AYRICA NATIVE WEBVIEW (v0.5.15).
+     ERP səhifəsinə heç nə yeridilmir: bu fayl app binarı ilə gəlir, panel
+     məzmunun ÜSTÜNƏ DÜŞƏ BİLMƏZ — pəncərə native səviyyədə iki webview-ə
+     bölünüb (content + rail). Genişlənmə rail webview-inin öz enini böyüdür
+     (rail_set_width) və müvəqqəti olaraq məzmunun üstünə native qatda çıxır. -->
+<html lang="az"><head><meta charset="utf-8"><title>İş sahələri</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#fff}
+  .bar{box-sizing:border-box;height:100%;display:flex;flex-direction:column;border-left:1px solid #e5e7eb;background:#fff}
+  .list{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0}
+  .it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 11px;border:0;background:transparent;cursor:pointer;text-align:left}
+  .it:hover{background:#f8fafc}.it[disabled]{cursor:default}
+  .ic{position:relative;flex:none;width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+  .u{background:#eef2ff;color:#4f46e5}.p{background:#ccfbf1;color:#0f766e}
+  .dot{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#10b981;border:2px solid #fff}
+  .tx{min-width:0;flex:1;display:none}
+  body.open .tx{display:block}
+  .nm{font-size:12.5px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kd{font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ft{flex:none;border-top:1px solid #f1f5f9}
+</style></head>
+<body>
+<div class="bar"><div class="list" id="list"></div><div class="ft" id="ft"></div></div>
+<script>
+(function(){
+  var TAURI = window.__TAURI__ || {};
+  var inv = TAURI.core && TAURI.core.invoke;
+  if (!inv) { document.getElementById('list').textContent = ''; return; }
+  var W = 56, WOPEN = 264;
+  var activeHost = '';
+
+  function hostOf(w){ return String(w.kind==='portal'?(w.portalSite||w.site):w.site).toLowerCase(); }
+
+  function render(ws){
+    var list = document.getElementById('list');
+    list.textContent = '';
+    ws.sort(function(a,b){ return (b.lastOpenedAt||b.createdAt||0)-(a.lastOpenedAt||a.createdAt||0); });
+    ws.forEach(function(w){
+      var active = hostOf(w) === activeHost;
+      var name = w.label || w.site || '';
+      var kind = w.kind==='portal' ? 'Müştəri' : 'İstifadəçi';
+      var b = document.createElement('button');
+      b.className = 'it'; b.type = 'button';
+      b.title = name + ' — ' + kind + (active ? ' · aktiv' : '');
+      if (active) b.disabled = true;
+      var ic = document.createElement('span');
+      ic.className = 'ic ' + (w.kind==='portal' ? 'p' : 'u');
+      ic.textContent = (name.trim()[0]||'?').toUpperCase();
+      if (active){ var d=document.createElement('span'); d.className='dot'; ic.appendChild(d); }
+      var tx = document.createElement('span'); tx.className='tx';
+      var nm = document.createElement('span'); nm.className='nm'; nm.textContent = name;
+      var kd = document.createElement('span'); kd.className='kd';
+      kd.textContent = kind + (active ? ' · aktiv' : '');
+      tx.appendChild(nm); tx.appendChild(kd);
+      b.appendChild(ic); b.appendChild(tx);
+      b.addEventListener('click', function(e){
+        if (active) return;
+        if (e.metaKey || e.ctrlKey) { inv('ws_open', {workspace: w}); }
+        else { inv('ws_activate', {workspace: w}).then(refresh); }
+      });
+      list.appendChild(b);
+    });
+  }
+
+  function refresh(){
+    inv('ws_current').then(function(h){ activeHost = String(h||'').toLowerCase(); })
+      .catch(function(){ activeHost=''; })
+      .then(function(){ return inv('ws_list'); })
+      .then(function(l){ if (Array.isArray(l)) render(l); })
+      .catch(function(){});
+  }
+
+  var mg = document.createElement('button');
+  mg.className = 'it'; mg.type = 'button'; mg.title = 'İş sahələrini idarə et';
+  var mic = document.createElement('span'); mic.className='ic';
+  mic.style.background='#f1f5f9'; mic.style.color='#64748b'; mic.textContent='+';
+  var mtx = document.createElement('span'); mtx.className='tx';
+  var mnm = document.createElement('span'); mnm.className='nm'; mnm.textContent='İş sahələri…';
+  mtx.appendChild(mnm);
+  mg.appendChild(mic); mg.appendChild(mtx);
+  mg.addEventListener('click', function(){ inv('ws_show_launcher'); });
+  document.getElementById('ft').appendChild(mg);
+
+  var closeT = null;
+  document.body.addEventListener('mouseenter', function(){
+    if (closeT){ clearTimeout(closeT); closeT = null; }
+    document.body.classList.add('open');
+    inv('rail_set_width', {width: WOPEN}).catch(function(){});
+    refresh();
+  });
+  document.body.addEventListener('mouseleave', function(){
+    closeT = setTimeout(function(){
+      document.body.classList.remove('open');
+      inv('rail_set_width', {width: W}).catch(function(){});
+    }, 220);
+  });
+
+  refresh();
+  setInterval(refresh, 4000);
+})();
+</script>
+</body></html>
