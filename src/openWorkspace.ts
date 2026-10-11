@@ -124,12 +124,21 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
   // yerdədir (launcher da, ERP içindəki zolaq da eyni əmri çağırır; iki
   // paralel implementasiya sessiya qabı seçimində ayrıla bilərdi). Rust həm
   // fayla upsert edir, həm izolyasiya ilə açır, alınmasa onsuz açır.
+  let rustError = ''
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('ws_open', { workspace: w })
     return { ok: true }
-  } catch {
+  } catch (e) {
     /* invoke yoxdur (brauzer dev) və ya əmr xətası — köhnə JS yoluna düş */
+    rustError = e instanceof Error ? e.message : String(e ?? '')
+  }
+
+  // 🔴 v0.5.17 — POS üçün Rust xətası UDULMUR. 0.5.16-da Windows-da POS pəncərəsi AĞ qaldı və
+  //    serverə heç bir sorğu getmədi: Rust alınmayanda bu ehtiyat yolu pəncərəni açırdı, xəta isə
+  //    görünmürdü. POS-u yarımçıq (izolyasiyasız / donmuş) açmaqdansa SƏBƏBİ göstərmək düzgündür.
+  if (w.kind === 'pos' && rustError && !/not found|undefined|__TAURI/i.test(rustError)) {
+    return { ok: false, error: `POS pəncərəsi açılmadı: ${rustError}` }
   }
 
   let api: typeof import('@tauri-apps/api/webviewWindow')
@@ -185,9 +194,19 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
 
   // 🔴 Yalnız DƏSTƏKLƏNƏN açar göndərilir (tiplərdə yoxlandı):
   //    macOS → `dataStoreIdentifier`, Windows/Linux → `dataDirectory`.
-  const isolated: Record<string, unknown> = isMac()
+  // 🔴 v0.5.17: `dataDirectory` MÜTLƏQ yol olmalıdır — v0.5.11 dərsi (Rust tərəfdə düzəlmişdi, bu
+  //    ehtiyat yolunda qalmışdı): NİSBİ yolla WebView2 başlaya bilmir → pəncərə yaranır, məzmun
+  //    yüklənmir (DONMUŞ AĞ pəncərə). Rust ilə EYNİ qovluq: `<app_local_data_dir>/webviews/<label>`.
+  let dataDirectory = ''
+  if (!isMac()) {
+    try {
+      const { appLocalDataDir, join } = await import('@tauri-apps/api/path')
+      dataDirectory = await join(await appLocalDataDir(), 'webviews', label)
+    } catch { /* yol alınmadısa izolyasiyasız açılacaq (aşağıda) */ }
+  }
+  const isolated: Record<string, unknown> | null = isMac()
     ? { ...base, dataStoreIdentifier: sessionBytes(w.id) }
-    : { ...base, dataDirectory: label }
+    : dataDirectory ? { ...base, dataDirectory } : null
 
   const attempt = (opts: Record<string, unknown>) =>
     new Promise<OpenResult>((resolve) => {
@@ -208,8 +227,10 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
   /** Pəncərə ARTIQ VAR xətası — yaratmaq yox, önə gətirmək lazımdır. */
   const isAlreadyExists = (msg?: string) => /already exists/i.test(msg || '')
 
-  // ① İzolyasiya ilə sına
-  const first = await attempt(isolated)
+  // ① İzolyasiya ilə sına (mütləq yol alınmayıbsa — birbaşa izolyasiyasız)
+  const first: OpenResult = isolated
+    ? await attempt(isolated)
+    : { ok: false, error: 'data qovluğunun yolu alınmadı' }
   if (first.ok) {
     // 🔴 Hadisəyə güvənmirik — ÖLÇÜRÜK (yuxarıdakı izaha bax)
     if (isMac()) {

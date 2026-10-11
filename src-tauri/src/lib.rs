@@ -535,9 +535,11 @@ fn ws_current(app: tauri::AppHandle) -> String {
 /// ⌘-klik ayrıca pəncərə istəyəndə rail `ws_open` çağırır (aşağıda).
 #[tauri::command]
 fn ws_activate(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
-    // v0.5.16 — POS HƏMİŞƏ öz pəncərəsində (öz sessiyası): eyni hostlu işçi panelinin cookie-sini əzməsin
+    // v0.5.16 — POS HƏMİŞƏ öz pəncərəsində (öz sessiyası): eyni hostlu işçi panelinin cookie-sini əzməsin.
+    // v0.5.17 — ana thread-dən kənarda (bax `ws_open`).
     if ws_field(&workspace, "kind") == "pos" {
-        return ws_open(app, workspace);
+        ws_open_detached(&app, workspace);
+        return Ok(());
     }
     #[cfg(desktop)]
     {
@@ -639,8 +641,28 @@ fn ws_upsert(app: &tauri::AppHandle, workspace: serde_json::Value) -> Result<ser
     Ok(w)
 }
 
+/// 🔴 v0.5.17 — ASİNXRON əmr. Sinxron əmrlər ana thread-də işləyir; Windows-da pəncərəni ana
+/// thread-dən (əmrin içindən) yaratmaq Tauri sənədlərində tövsiyə olunmur (wry#583 — WebView2
+/// mühiti ana thread-in mesaj dövrəsini gözləyir). 0.5.16-da Windows-da POS pəncərəsi AĞ qaldı və
+/// serverə heç bir sorğu getmədi. Gövdə `ws_open_impl`-dədir — tray və `ws_activate` onu
+/// `async_runtime::spawn` ilə çağırır (onlar da ana thread-dədir).
 #[tauri::command]
-fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+async fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    ws_open_impl(&app, workspace)
+}
+
+/// POS-u ana thread-dən KƏNARDA aç (tray / `ws_activate` ana thread-dədir).
+fn ws_open_detached(app: &tauri::AppHandle, workspace: serde_json::Value) {
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = ws_open_impl(&h, workspace) {
+            log::warn!("iş sahəsi pəncərəsi açılmadı: {e}");
+        }
+    });
+}
+
+fn ws_open_impl(app: &tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    let app = app.clone();
     let w = ws_upsert(&app, workspace)?;
     let id = ws_field(&w, "id").to_string();
 
@@ -807,9 +829,7 @@ pub fn run() {
                               if let Some(w) = ws_read(&h).into_iter().find(|x| ws_field(x, "id") == ws_id) {
                                   // v0.5.16 — POS öz pəncərəsində açılır (naviqasiya yox)
                                   if ws_field(&w, "kind") == "pos" {
-                                      if let Err(e) = ws_open(h.clone(), w) {
-                                          log::warn!("POS pəncərəsi açılmadı [{ws_id}]: {e}");
-                                      }
+                                      ws_open_detached(&h, w);
                                       return;
                                   }
                                   if let Ok(url) = ws_url(&w).parse::<tauri::Url>() {
