@@ -3,7 +3,8 @@
      ERP səhifəsinə heç nə yeridilmir: bu fayl app binarı ilə gəlir, panel
      məzmunun ÜSTÜNƏ DÜŞƏ BİLMƏZ — pəncərə native səviyyədə iki webview-ə
      bölünüb (content + rail). Genişlənmə rail webview-inin öz enini böyüdür
-     (rail_set_width) və müvəqqəti olaraq məzmunun üstünə native qatda çıxır. -->
+     (rail_set_width) və müvəqqəti olaraq məzmunun üstünə native qatda çıxır.
+     v0.5.19: genişlənmə yalnız siçan 3 saniyədən çox üstündə qalanda. -->
 <html lang="az"><head><meta charset="utf-8"><title>İş sahələri</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#fff}
@@ -86,18 +87,30 @@
   mg.addEventListener('click', function(){ inv('ws_show_launcher'); });
   document.getElementById('ft').appendChild(mg);
 
-  var closeT = null;
+  // v0.5.19 — Rasim: «üstündə 3 saniyədən çox qaldıqca açılsın, dərhal açılmasın». Siçan zolaqdan keçəndə
+  // panel ERP-nin üstünə çıxmır; dar halda ikona klik dərhal işləyir, adı `title` ipucu göstərir.
+  var OPEN_DELAY = 3000, CLOSE_DELAY = 220;
+  var openT = null, closeT = null;
+  function cancelOpen(){ if (openT){ clearTimeout(openT); openT = null; } }
   document.body.addEventListener('mouseenter', function(){
     if (closeT){ clearTimeout(closeT); closeT = null; }
-    document.body.classList.add('open');
-    inv('rail_set_width', {width: WOPEN}).catch(function(){});
     refresh();
+    if (document.body.classList.contains('open') || openT) return;
+    openT = setTimeout(function(){
+      openT = null;
+      document.body.classList.add('open');
+      inv('rail_set_width', {width: WOPEN}).catch(function(){});
+    }, OPEN_DELAY);
   });
+  // ikona basıb keçid edibsə, gözləyən açılış ləğv olur — iş artıq görülüb
+  document.body.addEventListener('mousedown', cancelOpen);
   document.body.addEventListener('mouseleave', function(){
+    cancelOpen();
     closeT = setTimeout(function(){
+      closeT = null;
       document.body.classList.remove('open');
       inv('rail_set_width', {width: W}).catch(function(){});
-    }, 220);
+    }, CLOSE_DELAY);
   });
 
   refresh();
