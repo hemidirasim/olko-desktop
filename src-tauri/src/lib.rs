@@ -173,6 +173,180 @@ fn native_print(ip: String, port: Option<u16>, data_base64: String) -> Result<()
     send_to_printer(&ip, port.unwrap_or(9100), &bytes)
 }
 
+// ═══ v0.5.18 (54.137) — USB / SİSTEM PRİNTERİNƏ RAW ÇAP ═══════════════════════════════
+// Rasim: «termal printer (ZY307) birbaşa USB ilə kompa qoşulub … pəncərə açılmasın, çap et vuran
+// kimi çap birbaşa getsin». Şəbəkə körpüsü (`native_print`) yalnız IP:9100 bilir; USB printer isə
+// OS-in çap növbəsindədir. ESC/POS baytları növbəyə **RAW** gedir — sürücünün səhifə tərtibatı,
+// dialoq yoxdur, kəsmə əmri işləyir. Windows: winspool (`OpenPrinterW` → `StartDocPrinterW` «RAW»
+// → `WritePrinter`); macOS / Linux: CUPS (`lp -o raw`). Printer adı YALNIZ sistem siyahısından
+// qəbul olunur — uzaq (tenant) səhifə sərbəst sətirlə başqa cihaza / fayla yazdıra bilməsin.
+
+/// Çap işinin tavanı — ESC/POS çeki adətən < 50 KB (loqo ilə < 500 KB).
+const USB_PRINT_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[cfg(windows)]
+mod sysprint {
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Graphics::Printing::{
+        ClosePrinter, EndDocPrinter, EndPagePrinter, EnumPrintersW, OpenPrinterW, StartDocPrinterW,
+        StartPagePrinter, WritePrinter, DOC_INFO_1W, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL,
+        PRINTER_INFO_4W,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn last_err() -> String {
+        std::io::Error::last_os_error().to_string()
+    }
+
+    unsafe fn from_wide(p: *const u16) -> Option<String> {
+        if p.is_null() {
+            return None;
+        }
+        let mut len = 0usize;
+        while *p.add(len) != 0 {
+            len += 1;
+        }
+        Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, len)))
+    }
+
+    pub fn list() -> Result<Vec<String>, String> {
+        let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+        let mut needed: u32 = 0;
+        let mut returned: u32 = 0;
+        unsafe {
+            // 1-ci çağırış: lazım olan bufer ölçüsü (ERROR_INSUFFICIENT_BUFFER gözlənilir)
+            EnumPrintersW(flags, std::ptr::null(), 4, std::ptr::null_mut(), 0, &mut needed, &mut returned);
+            if needed == 0 {
+                return Ok(Vec::new());
+            }
+            // u64 buferi — PRINTER_INFO_4W-nin göstəriciləri üçün düzgün hizalanma
+            let mut buf: Vec<u64> = vec![0; (needed as usize + 7) / 8];
+            if EnumPrintersW(flags, std::ptr::null(), 4, buf.as_mut_ptr() as *mut u8, needed, &mut needed, &mut returned) == 0 {
+                return Err(format!("printer siyahısı alınmadı: {}", last_err()));
+            }
+            let infos = std::slice::from_raw_parts(buf.as_ptr() as *const PRINTER_INFO_4W, returned as usize);
+            Ok(infos.iter().filter_map(|i| from_wide(i.pPrinterName)).collect())
+        }
+    }
+
+    pub fn print_raw(printer: &str, data: &[u8]) -> Result<(), String> {
+        let name = wide(printer);
+        let mut doc_name = wide("Olko POS");
+        let mut datatype = wide("RAW");
+        unsafe {
+            let mut h: HANDLE = std::ptr::null_mut();
+            if OpenPrinterW(name.as_ptr(), &mut h, std::ptr::null()) == 0 {
+                return Err(format!("printer açılmadı ({printer}): {}", last_err()));
+            }
+            let di = DOC_INFO_1W {
+                pDocName: doc_name.as_mut_ptr(),
+                pOutputFile: std::ptr::null_mut(),
+                pDatatype: datatype.as_mut_ptr(),
+            };
+            if StartDocPrinterW(h, 1, &di) == 0 {
+                let e = last_err();
+                ClosePrinter(h);
+                return Err(format!("çap işi başlamadı ({printer}): {e}"));
+            }
+            let mut result: Result<(), String> = Ok(());
+            if StartPagePrinter(h) == 0 {
+                result = Err(format!("səhifə başlamadı: {}", last_err()));
+            } else {
+                let mut written: u32 = 0;
+                if WritePrinter(h, data.as_ptr() as *const core::ffi::c_void, data.len() as u32, &mut written) == 0 {
+                    result = Err(format!("printerə yazılmadı: {}", last_err()));
+                } else if written as usize != data.len() {
+                    result = Err(format!("printerə yarımçıq yazıldı ({written}/{})", data.len()));
+                }
+                EndPagePrinter(h);
+            }
+            EndDocPrinter(h);
+            ClosePrinter(h);
+            result
+        }
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))]
+mod sysprint {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    pub fn list() -> Result<Vec<String>, String> {
+        // `lpstat -e` — növbə adları, sətir-sətir. Printer yoxdursa sıfırdan fərqli kodla çıxır → boş siyahı.
+        let out = Command::new("lpstat").arg("-e").output().map_err(|e| format!("lpstat: {e}"))?;
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    pub fn print_raw(printer: &str, data: &[u8]) -> Result<(), String> {
+        let mut child = Command::new("lp")
+            .args(["-d", printer, "-o", "raw"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("lp: {e}"))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "lp stdin yoxdur".to_string())?
+            .write_all(data)
+            .map_err(|e| format!("lp yazma: {e}"))?;
+        let out = child.wait_with_output().map_err(|e| format!("lp: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!("lp: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod sysprint {
+    pub fn list() -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    pub fn print_raw(_printer: &str, _data: &[u8]) -> Result<(), String> {
+        Err("bu platformada USB çap yoxdur".into())
+    }
+}
+
+/// Printer adı sistem siyahısındadırmı (dəqiq uyğunluq). Boş ad — yox.
+fn usb_printer_allowed(name: &str, list: &[String]) -> bool {
+    !name.is_empty() && list.iter().any(|p| p == name)
+}
+
+#[tauri::command]
+async fn native_list_printers() -> Result<Vec<String>, String> {
+    sysprint::list()
+}
+
+#[tauri::command]
+async fn native_print_usb(printer: String, data_base64: String) -> Result<(), String> {
+    let printer = printer.trim().to_string();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("boş data".to_string());
+    }
+    if bytes.len() > USB_PRINT_MAX_BYTES {
+        return Err("çap işi çox böyükdür".to_string());
+    }
+    let list = sysprint::list()?;
+    if !usb_printer_allowed(&printer, &list) {
+        return Err(format!("printer tapılmadı: «{printer}» — Printer ayarında yenidən seçin"));
+    }
+    sysprint::print_raw(&printer, &bytes)
+}
+
 fn start_bridge() {
     std::thread::spawn(|| {
         match tiny_http::Server::http(("127.0.0.1", BRIDGE_PORT)) {
@@ -945,6 +1119,8 @@ pub fn run() {
             native_ping,
             native_test,
             native_print,
+            native_list_printers,
+            native_print_usb,
             ws_list,
             ws_save,
             ws_open,
@@ -1009,5 +1185,22 @@ mod pos_link_tests {
         assert_eq!(name, "POS-00003 · moonmobile.olkoerp.com");
         assert!(!name.contains("SECRET"));
         assert_eq!(ws_kind_label(&w), "POS");
+    }
+}
+
+#[cfg(test)]
+mod usb_print_tests {
+    //! v0.5.18 — printer adı yalnız sistem siyahısından (uzaq səhifə sərbəst sətirlə başqa növbəyə yazdırmasın).
+    use super::usb_printer_allowed;
+
+    #[test]
+    fn only_exact_names_from_system_list() {
+        let list = vec!["ZY307".to_string(), "Microsoft Print to PDF".to_string()];
+        assert!(usb_printer_allowed("ZY307", &list));
+        assert!(usb_printer_allowed("Microsoft Print to PDF", &list));
+        assert!(!usb_printer_allowed("zy307", &list), "dəqiq uyğunluq");
+        assert!(!usb_printer_allowed("", &list));
+        assert!(!usb_printer_allowed("\\\\server\\share", &list));
+        assert!(!usb_printer_allowed("ZY307", &[]));
     }
 }

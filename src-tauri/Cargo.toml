@@ -34,3 +34,8 @@ tiny_http = "0.12"
 open = "5"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# ✅ v0.5.18 (54.137): USB termal printerə RAW çap — Windows çap növbəsi (winspool).
+# Lock-da artıq olan 0.59 (yeni versiya çəkilmir).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Printing"] }

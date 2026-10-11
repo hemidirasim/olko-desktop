@@ -21,6 +21,8 @@
     "allow-native-ping",
     "allow-native-test",
     "allow-native-print",
+    "allow-native-list-printers",
+    "allow-native-print-usb",
     "updater:default",
     "process:allow-restart",
     "core:webview:allow-create-webview-window",
