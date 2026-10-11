@@ -12,7 +12,7 @@
   .it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 11px;border:0;background:transparent;cursor:pointer;text-align:left}
   .it:hover{background:#f8fafc}.it[disabled]{cursor:default}
   .ic{position:relative;flex:none;width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
-  .u{background:#eef2ff;color:#4f46e5}.p{background:#ccfbf1;color:#0f766e}
+  .u{background:#eef2ff;color:#4f46e5}.p{background:#ccfbf1;color:#0f766e}.s{background:#fef3c7;color:#b45309}
   .dot{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#10b981;border:2px solid #fff}
   .tx{min-width:0;flex:1;display:none}
   body.open .tx{display:block}
@@ -31,21 +31,25 @@
   var activeHost = '';
 
   function hostOf(w){ return String(w.kind==='portal'?(w.portalSite||w.site):w.site).toLowerCase(); }
+  // v0.5.16 — POS: ad yoxdursa linkdən terminal kodu (🔴 token heç vaxt göstərilmir)
+  function posName(w){ var m = String(w.posLink||'').match(/\/pos\/([^\/?#]+)/i); try { return w.label || (m ? decodeURIComponent(m[1]) : '') || 'POS'; } catch(e){ return w.label || 'POS'; } }
 
   function render(ws){
     var list = document.getElementById('list');
     list.textContent = '';
     ws.sort(function(a,b){ return (b.lastOpenedAt||b.createdAt||0)-(a.lastOpenedAt||a.createdAt||0); });
     ws.forEach(function(w){
-      var active = hostOf(w) === activeHost;
-      var name = w.label || w.site || '';
-      var kind = w.kind==='portal' ? 'Müştəri' : 'İstifadəçi';
+      var pos = w.kind === 'pos';
+      // POS öz pəncərəsində açılır — əsas pəncərədəki eyni hostlu işçi paneli onu «aktiv» etməməlidir
+      var active = !pos && hostOf(w) === activeHost;
+      var name = pos ? posName(w) : (w.label || w.site || '');
+      var kind = pos ? 'POS · ' + (w.site||'') : w.kind==='portal' ? 'Müştəri' : 'İstifadəçi';
       var b = document.createElement('button');
       b.className = 'it'; b.type = 'button';
       b.title = name + ' — ' + kind + (active ? ' · aktiv' : '');
       if (active) b.disabled = true;
       var ic = document.createElement('span');
-      ic.className = 'ic ' + (w.kind==='portal' ? 'p' : 'u');
+      ic.className = 'ic ' + (pos ? 's' : w.kind==='portal' ? 'p' : 'u');
       ic.textContent = (name.trim()[0]||'?').toUpperCase();
       if (active){ var d=document.createElement('span'); d.className='dot'; ic.appendChild(d); }
       var tx = document.createElement('span'); tx.className='tx';
@@ -56,7 +60,7 @@
       b.appendChild(ic); b.appendChild(tx);
       b.addEventListener('click', function(e){
         if (active) return;
-        if (e.metaKey || e.ctrlKey) { inv('ws_open', {workspace: w}); }
+        if (pos || e.metaKey || e.ctrlKey) { inv('ws_open', {workspace: w}); }
         else { inv('ws_activate', {workspace: w}).then(refresh); }
       });
       list.appendChild(b);

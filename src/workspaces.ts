@@ -29,7 +29,12 @@
  * fərqlidir. Ona görə platformaya görə ayrılırıq.
  */
 
-export type WorkspaceKind = 'user' | 'portal'
+/**
+ * v0.5.16 — üçüncü növ `pos`: POS terminal LİNKİ (`/pos/<terminal>?token=…`), mobil app ilə eyni
+ * (`olko-app/src/workspaces.ts` → `parsePosLink`). Rasim: «desktop appda … mobile appdakı kimi pos terminal
+ * (tokenlə) giriş yoxdur». Pəncərə öz sessiyasındadır → token girişi işçi panelinin sessiyasını əzmir.
+ */
+export type WorkspaceKind = 'user' | 'portal' | 'pos'
 
 export interface Workspace {
   /** Sabit açar — pəncərə etiketi və sessiya qabı bundan törəyir. */
@@ -44,6 +49,11 @@ export interface Workspace {
    * Boşdursa köhnə davranış: `site` üzərində `/portal`.
    */
   portalSite?: string
+  /**
+   * v0.5.16 — yalnız `pos` növündə: adminin «POS terminalları» səhifəsindən kopyaladığı TAM link
+   * (`https://{biznes}/pos/POS-00001?token=…`). 🔴 Token buradadır — kartda / başlıqda GÖSTƏRİLMİR.
+   */
+  posLink?: string
   /** İstifadəçinin verdiyi ad (boşdursa sayt adı göstərilir). */
   label?: string
   createdAt: number
@@ -123,14 +133,49 @@ export async function resolveSiteHost(raw: string): Promise<ResolvedHost> {
   }
 }
 
+/** Master (marketinq) saytı — iş sahəsi ola bilməz. Mobil app ilə eyni siyahı. */
+const MASTER_HOSTS = new Set(['olkoerp.com', 'www.olkoerp.com'])
+const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+
+/**
+ * v0.5.16 — POS terminal linkini yoxla və açılacaq ünvanı qur. Mobil `parsePosLink` ilə EYNİ qaydalar
+ * (iki yerdə fərqli qayda olmasın): yalnız https, istifadəçi adı hissəsi YOX (`https://x@olkoerp.com/pos/…`
+ * hostu gizlədir — 47.101 / Apple dərsi), master sayt yox, yol `/pos/<terminal>`.
+ * `olko_native_print=1` — POS səhifəsi çapı app-ın printer körpüsünə yönləndirir.
+ * Rust tərəfi (`ws_url`) eyni yoxlamanı TƏKRAR edir — `ws_open` uzaq səhifədən də çağırıla bilir.
+ */
+export function parsePosLink(raw: string): { url: string; terminal: string; site: string } | null {
+  let s = (raw || '').trim()
+  if (!s) return null
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s
+  let u: URL
+  try { u = new URL(s) } catch { return null }
+  if (u.username || u.password) return null
+  if (u.protocol === 'http:') u.protocol = 'https:'
+  if (u.protocol !== 'https:' || u.port) return null
+  const host = u.hostname.toLowerCase()
+  if (!host || host.length > 253 || !HOST_RE.test(host) || MASTER_HOSTS.has(host)) return null
+  const m = u.pathname.match(/^\/pos\/([^/]+)\/?$/i)
+  if (!m) return null
+  u.searchParams.set('olko_native_print', '1')
+  return { url: u.toString(), terminal: decodeURIComponent(m[1]), site: host }
+}
+
 /** İş sahəsinin açacağı tam ünvan. */
 export function workspaceUrl(w: Workspace): string {
   // Yol həmişə `/portal` qalır — ayıran şey HOST-dur (cookie hosta bağlıdır).
   if (w.kind === 'portal') return `https://${w.portalSite || w.site}/portal`
+  if (w.kind === 'pos') return parsePosLink(w.posLink || '')?.url || `https://${w.site}`
   return `https://${w.site}`
 }
 
+/** Kart / başlıq üçün POS adı: istifadəçinin adı, yoxdursa terminal kodu. Token heç vaxt. */
+export function posTerminalName(w: Workspace): string {
+  return w.label || parsePosLink(w.posLink || '')?.terminal || 'POS'
+}
+
 export function workspaceTitle(w: Workspace): string {
+  if (w.kind === 'pos') return `${posTerminalName(w)} · ${w.site} — POS`
   const side = w.kind === 'portal' ? 'Müştəri' : 'İstifadəçi'
   return `${w.label || w.site} — ${side}`
 }

@@ -3,7 +3,7 @@ import olkoLogo from './assets/olko-logo.png'
 import UpdateGate, { UPDATE_ERR_KEY } from './UpdateGate'
 import './index.css'
 import {
-  addWorkspace, loadWorkspaces, newId, normalizeSite, saveWorkspaces,
+  addWorkspace, loadWorkspaces, newId, normalizeSite, parsePosLink, posTerminalName, saveWorkspaces,
   resolveSiteHost, workspaceUrl, type Workspace, type WorkspaceKind,
 } from './workspaces'
 import { isMac, isolationFailureReason, isolationSupported, openWorkspaceWindow } from './openWorkspace'
@@ -104,6 +104,8 @@ function App() {
   const [resolving, setResolving] = useState(false)
   /** «Açılacaq: …» sətri üçün HƏQİQİ ünvan (təxmin yox). */
   const [previewHost, setPreviewHost] = useState('')
+  /** v0.5.16 — POS terminal üçün istəyə bağlı ad (link `siteUrl`-dadır). */
+  const [posLabel, setPosLabel] = useState('')
   /**
    * Hazırda AÇIQ olan iş sahəsi pəncərələri (`ws-<id>` etiketləri).
    * AnyDesk-dəki yaşıl «qoşulu» göstəricisinin qarşılığı — istifadəçi hansının
@@ -236,7 +238,9 @@ function App() {
     setWorkspaces(updated)
     saveWorkspaces(updated)
 
-    if (IS_MOBILE || !newWindow) {
+    // 🔴 v0.5.16: POS HƏMİŞƏ öz pəncərəsində (öz sessiyası) — token girişi eyni biznesin işçi
+    //    panelinin sessiyasını əzməsin (eyni host = eyni cookie qabı).
+    if (IS_MOBILE || (!newWindow && w.kind !== 'pos')) {
       // `assign` (`replace` yox): launcher tarixçədə qalır, yəni geri
       // naviqasiyası mümkün olan platformalarda əlavə bir çıxış yolu var.
       window.location.assign(workspaceUrl(w))
@@ -249,6 +253,34 @@ function App() {
 
   const handleAdd = async () => {
     setError('')
+    if (newKind === 'pos') {
+      // v0.5.16 — POS: biznes adı yox, terminal LİNKİ (resolver lazım deyil — host linkin özündədir)
+      const parsed = parsePosLink(siteUrl)
+      if (!parsed) {
+        setError('Link yanlışdır — «POS terminalları» səhifəsindən terminal linkini kopyalayın (…/pos/POS-00001?token=…)')
+        return
+      }
+      const dup = workspaces.find(x => x.kind === 'pos' && x.site === parsed.site
+        && parsePosLink(x.posLink || '')?.terminal === parsed.terminal)
+      if (dup) {
+        // Eyni terminal artıq var — yeni link (yeni token) gəlibsə onu yaz, sonra aç
+        const updated = workspaces.map(x => x.id === dup.id
+          ? { ...x, posLink: siteUrl.trim(), label: posLabel.trim() || x.label } : x)
+        setWorkspaces(updated); saveWorkspaces(updated)
+        setScreen('launcher'); setSiteUrl(''); setPosLabel(''); setNewKind(null)
+        void openWorkspace(updated.find(x => x.id === dup.id)!, updated)
+        return
+      }
+      const w: Workspace = {
+        id: newId(), kind: 'pos', site: parsed.site, posLink: siteUrl.trim(),
+        label: posLabel.trim() || undefined, createdAt: Date.now(),
+      }
+      const next = [...workspaces, w]
+      setWorkspaces(next); saveWorkspaces(next)
+      setSiteUrl(''); setPosLabel(''); setNewKind(null); setScreen('launcher')
+      void openWorkspace(w, next)
+      return
+    }
     if (!normalizeSite(siteUrl)) {
       setError('Biznes adını daxil edin')
       return
@@ -287,7 +319,7 @@ function App() {
   //    yazanda ekranda `admedia.olkoerp.com` yazılırdı, proqram isə
   //    `control.admedia.az` açırdı — istifadəçiyə yalan məlumat.
   useEffect(() => {
-    if (screen !== 'add' || !newKind || !siteUrl.trim()) {
+    if (screen !== 'add' || !newKind || newKind === 'pos' || !siteUrl.trim()) {
       setPreviewHost('')
       return
     }
@@ -371,8 +403,8 @@ function App() {
               <div style={styles.emptyIcon}>◳</div>
               <p style={styles.emptyTitle}>Hələ iş sahəsi yoxdur</p>
               <p style={styles.emptyText}>
-                Biznesinizi əlavə edin — işçi paneli və müştəri portalı ayrı-ayrı
-                pəncərələrdə açılacaq.
+                Biznesinizi əlavə edin — işçi paneli, müştəri portalı və POS
+                terminalı ayrı-ayrı pəncərələrdə açılacaq.
               </p>
               <button style={styles.emptyBtn} onClick={() => { setError(''); setScreen('add') }}>
                 Başlayaq
@@ -401,6 +433,10 @@ function App() {
                 { kind: 'portal' as WorkspaceKind, title: 'Müştəri portalı',
                   hint: 'Sifariş və hesablar', accent: '#0d9488',
                   surface: 'rgba(13,148,136,0.05)', edge: 'rgba(13,148,136,0.18)' },
+                // v0.5.16 — POS terminalı (tokenli link, öz pəncərəsi və sessiyası)
+                { kind: 'pos' as WorkspaceKind, title: 'POS terminalı',
+                  hint: 'Kassa — terminal linki ilə', accent: '#d97706',
+                  surface: 'rgba(217,119,6,0.05)', edge: 'rgba(217,119,6,0.20)' },
               ]).map(col => {
                 const items = sorted.filter(w => w.kind === col.kind)
                 return (
@@ -434,7 +470,7 @@ function App() {
                             >
                               {/* Üz — determinist rəng + monoqram */}
                               <div style={{ ...styles.cover, background: coverGradient(brandKey(w.site)) }}>
-                                <span style={styles.monogram}>{monogram(w.label || w.site)}</span>
+                                <span style={styles.monogram}>{monogram(w.kind === 'pos' ? posTerminalName(w) : (w.label || w.site))}</span>
                                 <span style={{
                                   ...styles.dot,
                                   background: isOpen ? '#22c55e' : 'rgba(255,255,255,0.55)',
@@ -447,7 +483,8 @@ function App() {
 
                               {/* Ünvan zolağı */}
                               <div style={styles.cardFoot}>
-                                <span style={styles.cardHost}>{w.label || host}</span>
+                                {/* POS: ad / terminal + host — 🔴 token heç vaxt göstərilmir */}
+                                <span style={styles.cardHost}>{w.kind === 'pos' ? `${posTerminalName(w)} · ${host}` : (w.label || host)}</span>
                                 <span style={styles.cardMeta}>
                                   {busy ? 'açılır…' : isOpen ? 'açıqdır' : lastSeen(w.lastOpenedAt)}
                                 </span>
@@ -470,7 +507,7 @@ function App() {
                       >
                         <span style={styles.addCardPlus}>+</span>
                         <span style={styles.addCardText}>
-                          {col.kind === 'portal' ? 'Portal əlavə et' : 'İş sahəsi əlavə et'}
+                          {col.kind === 'portal' ? 'Portal əlavə et' : col.kind === 'pos' ? 'POS əlavə et' : 'İş sahəsi əlavə et'}
                         </span>
                       </button>
                     </div>
@@ -541,13 +578,14 @@ function App() {
             <div>
               <div style={styles.brandName}>Yeni iş sahəsi</div>
               <div style={styles.brandSub}>
-                {newKind ? 'Biznes adını daxil edin' : 'Hansı tərəfdən daxil olursunuz?'}
+                {newKind === 'pos' ? 'POS terminal linkini yapışdırın'
+                  : newKind ? 'Biznes adını daxil edin' : 'Hansı tərəfdən daxil olursunuz?'}
               </div>
             </div>
           </div>
           <button
             style={styles.topGhost}
-            onClick={() => { setError(''); setNewKind(null); setSiteUrl(''); setScreen('launcher') }}
+            onClick={() => { setError(''); setNewKind(null); setSiteUrl(''); setPosLabel(''); setScreen('launcher') }}
           >
             ← Geri
           </button>
@@ -557,31 +595,74 @@ function App() {
           <div style={styles.addPanel}>
             {/* Addım 1 — tərəf */}
             <div style={styles.kindRow}>
-              {(['user', 'portal'] as WorkspaceKind[]).map(k => (
+              {(['user', 'portal', 'pos'] as WorkspaceKind[]).map(k => (
                 <button
                   key={k}
                   style={{
                     ...styles.kindBtn,
                     ...(newKind === k
-                      ? (k === 'portal' ? styles.kindBtnActivePortal : styles.kindBtnActiveUser)
+                      ? (k === 'portal' ? styles.kindBtnActivePortal
+                        : k === 'pos' ? styles.kindBtnActivePos : styles.kindBtnActiveUser)
                       : {}),
                   }}
-                  onClick={() => { setError(''); setNewKind(k) }}
+                  onClick={() => { setError(''); if (newKind !== k) setSiteUrl(''); setNewKind(k) }}
                 >
                   <span style={{
                     ...styles.kindDot,
-                    background: k === 'portal' ? '#0d9488' : '#4f46e5',
+                    background: k === 'portal' ? '#0d9488' : k === 'pos' ? '#d97706' : '#4f46e5',
                   }} />
-                  <span style={styles.kindTitle}>{k === 'user' ? 'İstifadəçi' : 'Müştəri'}</span>
+                  <span style={styles.kindTitle}>{k === 'user' ? 'İstifadəçi' : k === 'pos' ? 'POS terminalı' : 'Müştəri'}</span>
                   <span style={styles.kindSub}>
-                    {k === 'user' ? 'Şirkət işçisi — ERP paneli' : 'Portal — sifariş və hesablar'}
+                    {k === 'user' ? 'Şirkət işçisi — ERP paneli'
+                      : k === 'pos' ? 'Kassa — terminal linki ilə' : 'Portal — sifariş və hesablar'}
                   </span>
                 </button>
               ))}
             </div>
 
+            {/* Addım 2 (POS) — terminal linki + istəyə bağlı ad */}
+            {newKind === 'pos' && (
+              <>
+                <div style={styles.field}>
+                  <label style={styles.label}>Terminal linki</label>
+                  <input
+                    style={styles.input}
+                    type="text"
+                    placeholder="https://biznesiniz.olkoerp.com/pos/POS-00001?token=…"
+                    value={siteUrl}
+                    onChange={e => { setSiteUrl(e.target.value); setError('') }}
+                    onKeyDown={handleKeyDown}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    autoFocus
+                  />
+                  {siteUrl.trim() && (() => {
+                    const p = parsePosLink(siteUrl)
+                    return (
+                      <p style={{ ...styles.note, ...(p ? {} : { color: '#b45309' }) }}>
+                        {p ? `Terminal: ${p.terminal} · ${p.site}` : 'Link tanınmadı — …/pos/<terminal>?token=… formatında olmalıdır'}
+                      </p>
+                    )
+                  })()}
+                  <p style={styles.note}>ERP-də «POS terminalları» → terminal → «Avtomatik Giriş Linki (Token)» → «Terminal linkini kopyala».</p>
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Ad (istəyə bağlı)</label>
+                  <input
+                    style={styles.input}
+                    type="text"
+                    placeholder="məs. Əsas kassa"
+                    value={posLabel}
+                    onChange={e => setPosLabel(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                  />
+                </div>
+              </>
+            )}
+
             {/* Addım 2 — biznes adı */}
-            {newKind && (
+            {newKind && newKind !== 'pos' && (
               <div style={styles.field}>
                 <label style={styles.label}>Biznes adı</label>
                 <input
@@ -858,7 +939,7 @@ const styles: Record<string, React.CSSProperties> = {
   // ─── Əlavəetmə paneli ───
   addPanel: {
     width: '100%',
-    maxWidth: 460,
+    maxWidth: 520,   // v0.5.16: üç tərəf kartı (İstifadəçi / Müştəri / POS) bir sırada
     display: 'flex',
     flexDirection: 'column',
     gap: 14,
@@ -891,6 +972,11 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: '#0d9488',
     boxShadow: '0 0 0 3px rgba(13,148,136,0.12)',
     background: '#f0fdfa',
+  },
+  kindBtnActivePos: {
+    borderColor: '#d97706',
+    boxShadow: '0 0 0 3px rgba(217,119,6,0.14)',
+    background: '#fffbeb',
   },
   kindDot: { width: 7, height: 7, borderRadius: '50%', marginBottom: 2 },
   kindTitle: { fontSize: 13.5, fontWeight: 700, color: '#0f172a' },

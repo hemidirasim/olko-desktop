@@ -258,11 +258,8 @@ fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<ta
         if id.is_empty() {
             continue;
         }
-        let name = {
-            let l = ws_field(w, "label");
-            if l.is_empty() { ws_field(w, "site") } else { l }
-        };
-        let kind = if ws_field(w, "kind") == "portal" { "Müştəri" } else { "İstifadəçi" };
+        let name = ws_display_name(w);
+        let kind = ws_kind_label(w);
         owned.push(
             MenuItemBuilder::with_id(format!("ws:{id}"), format!("{name} — {kind}")).build(app)?,
         );
@@ -393,8 +390,89 @@ fn ws_valid_host(h: &str) -> bool {
         && !h.ends_with(['.', '-'])
 }
 
+/// v0.5.16 — POS terminal linki (`https://{host}/pos/<terminal>?token=…`) → açılacaq ünvan.
+/// JS `parsePosLink` ilə EYNİ qaydalar, burada TƏKRAR yoxlanır: `ws_open` uzaq (tenant) səhifədən də
+/// çağırıla bilir. Yalnız https (http → https), istifadəçi adı/şifrə hissəsi YOX (`https://x@host` hostu
+/// gizlədir), port yox, host `ws_valid_host`, master sayt yox, yol `/pos/<terminal>`.
+/// `olko_native_print=1` — POS səhifəsi çapı app-ın printer körpüsünə yönləndirir.
+fn ws_pos_url(link: &str) -> Option<(String, String)> {
+    let raw = link.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let with_scheme = if raw.starts_with("https://") || raw.starts_with("http://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let mut u: tauri::Url = with_scheme.parse().ok()?;
+    if !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
+        return None;
+    }
+    if u.scheme() == "http" {
+        u.set_scheme("https").ok()?;
+    }
+    if u.scheme() != "https" {
+        return None;
+    }
+    let host = u.host_str()?.to_ascii_lowercase();
+    if !ws_valid_host(&host) || host == "olkoerp.com" || host == "www.olkoerp.com" {
+        return None;
+    }
+    let path = u.path().trim_end_matches('/').to_string();
+    let terminal = path.strip_prefix("/pos/")?;
+    if terminal.is_empty() || terminal.contains('/') {
+        return None;
+    }
+    let pairs: Vec<(String, String)> = u
+        .query_pairs()
+        .filter(|(k, _)| k != "olko_native_print")
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    {
+        let mut q = u.query_pairs_mut();
+        q.clear();
+        for (k, v) in &pairs {
+            q.append_pair(k, v);
+        }
+        q.append_pair("olko_native_print", "1");
+    }
+    Some((u.to_string(), host))
+}
+
+/// Tray / pəncərə başlığı üçün tərəf adı.
+fn ws_kind_label(w: &serde_json::Value) -> &'static str {
+    match ws_field(w, "kind") {
+        "portal" => "Müştəri",
+        "pos" => "POS",
+        _ => "İstifadəçi",
+    }
+}
+
+/// Tray / başlıq üçün ad. POS-da ad yoxdursa terminal kodu — 🔴 token heç vaxt.
+fn ws_display_name(w: &serde_json::Value) -> String {
+    let l = ws_field(w, "label");
+    if !l.is_empty() {
+        return l.to_string();
+    }
+    if ws_field(w, "kind") == "pos" {
+        if let Some(t) = ws_field(w, "posLink").split("/pos/").nth(1) {
+            let t = t.split(['?', '#', '/']).next().unwrap_or("");
+            if !t.is_empty() {
+                return format!("{t} · {}", ws_field(w, "site"));
+            }
+        }
+    }
+    ws_field(w, "site").to_string()
+}
+
 fn ws_url(w: &serde_json::Value) -> String {
     let site = ws_field(w, "site");
+    if ws_field(w, "kind") == "pos" {
+        return ws_pos_url(ws_field(w, "posLink"))
+            .map(|(u, _)| u)
+            .unwrap_or_else(|| format!("https://{}", site));
+    }
     if ws_field(w, "kind") == "portal" {
         let ps = ws_field(w, "portalSite");
         format!("https://{}/portal", if ps.is_empty() { site } else { ps })
@@ -457,6 +535,10 @@ fn ws_current(app: tauri::AppHandle) -> String {
 /// ⌘-klik ayrıca pəncərə istəyəndə rail `ws_open` çağırır (aşağıda).
 #[tauri::command]
 fn ws_activate(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), String> {
+    // v0.5.16 — POS HƏMİŞƏ öz pəncərəsində (öz sessiyası): eyni hostlu işçi panelinin cookie-sini əzməsin
+    if ws_field(&workspace, "kind") == "pos" {
+        return ws_open(app, workspace);
+    }
     #[cfg(desktop)]
     {
         let w = ws_upsert(&app, workspace)?;
@@ -531,6 +613,13 @@ fn ws_upsert(app: &tauri::AppHandle, workspace: serde_json::Value) -> Result<ser
     if ws_field(&workspace, "site").is_empty() {
         return Err("site boşdur".into());
     }
+    // v0.5.16 — POS: link etibarlı olmalı və host `site` ilə üst-üstə düşməlidir
+    if ws_field(&workspace, "kind") == "pos" {
+        match ws_pos_url(ws_field(&workspace, "posLink")) {
+            Some((_, host)) if host == ws_field(&workspace, "site") => {}
+            _ => return Err("POS linki yanlışdır".into()),
+        }
+    }
 
     let mut list = ws_read(app);
     let now = std::time::SystemTime::now()
@@ -564,14 +653,7 @@ fn ws_open(app: tauri::AppHandle, workspace: serde_json::Value) -> Result<(), St
     }
 
     let url: tauri::Url = ws_url(&w).parse().map_err(|e| format!("{e}"))?;
-    let title = format!(
-        "{} — {}",
-        {
-            let l = ws_field(&w, "label");
-            if l.is_empty() { ws_field(&w, "site") } else { l }.to_string()
-        },
-        if ws_field(&w, "kind") == "portal" { "Müştəri" } else { "İstifadəçi" }
-    );
+    let title = format!("{} — {}", ws_display_name(&w), ws_kind_label(&w));
 
     /* 🔴 v0.5.11 — WINDOWS AĞ EKRAN DÜZƏLİŞİ.
        Əvvəl `data_directory(PathBuf::from(&label))` yazılırdı, yəni NİSBİ yol
@@ -723,6 +805,13 @@ pub fn run() {
                           // `match` qollarından ƏVVƏL yoxlanır.
                           if let Some(ws_id) = raw.strip_prefix("ws:") {
                               if let Some(w) = ws_read(&h).into_iter().find(|x| ws_field(x, "id") == ws_id) {
+                                  // v0.5.16 — POS öz pəncərəsində açılır (naviqasiya yox)
+                                  if ws_field(&w, "kind") == "pos" {
+                                      if let Err(e) = ws_open(h.clone(), w) {
+                                          log::warn!("POS pəncərəsi açılmadı [{ws_id}]: {e}");
+                                      }
+                                      return;
+                                  }
                                   if let Ok(url) = ws_url(&w).parse::<tauri::Url>() {
                                       // Eyni pəncərədə davam (v0.5.10 qərarı):
                                       // fokusdakı, yoxdursa `main`.
@@ -857,4 +946,48 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod pos_link_tests {
+    //! v0.5.16 — `ws_pos_url` JS `parsePosLink` ilə EYNİ qərarı verməlidir (iki qayda olmasın).
+    use super::{ws_display_name, ws_kind_label, ws_pos_url};
+
+    #[test]
+    fn accepts_terminal_links_and_forces_native_print() {
+        let (u, h) = ws_pos_url("https://moonmobile.olkoerp.com/pos/POS-00003?token=abc123").unwrap();
+        assert_eq!(u, "https://moonmobile.olkoerp.com/pos/POS-00003?token=abc123&olko_native_print=1");
+        assert_eq!(h, "moonmobile.olkoerp.com");
+        let (u, _) = ws_pos_url("moonmobile.olkoerp.com/pos/POS-00003?token=abc").unwrap();
+        assert!(u.starts_with("https://moonmobile.olkoerp.com/pos/POS-00003?token=abc"));
+        let (u, _) = ws_pos_url("http://qurman.olkoerp.com/pos/POS-00001?token=t&olko_native_print=0").unwrap();
+        assert_eq!(u, "https://qurman.olkoerp.com/pos/POS-00001?token=t&olko_native_print=1");
+        assert!(ws_pos_url("https://control.admedia.az/pos/POS-00001/?token=z").is_some());
+    }
+
+    #[test]
+    fn rejects_unsafe_or_foreign_links() {
+        for bad in [
+            "https://x@olkoerp.com/pos/POS-1?token=t",   // istifadəçi adı hissəsi hostu gizlədir
+            "https://olkoerp.com/pos/POS-1?token=t",     // master sayt
+            "https://a.olkoerp.com/app/pos/POS-1",       // yol /pos/ ilə başlamır
+            "https://a.olkoerp.com:8443/pos/POS-1",      // port
+            "https://a.olkoerp.com/pos/",                // terminal yoxdur
+            "https://a.olkoerp.com/pos/A/B",             // artıq seqment
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(ws_pos_url(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn labels_never_show_token() {
+        let w = serde_json::json!({"kind": "pos", "site": "moonmobile.olkoerp.com",
+            "posLink": "https://moonmobile.olkoerp.com/pos/POS-00003?token=SECRET"});
+        let name = ws_display_name(&w);
+        assert_eq!(name, "POS-00003 · moonmobile.olkoerp.com");
+        assert!(!name.contains("SECRET"));
+        assert_eq!(ws_kind_label(&w), "POS");
+    }
 }
