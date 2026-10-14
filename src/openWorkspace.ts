@@ -190,6 +190,8 @@ export async function openWorkspaceWindow(w: Workspace): Promise<OpenResult> {
     minHeight: 700,
     center: true,
     resizable: true,
+    // v0.5.20 (ERP 54.163): Rust tərəfi ilə eyni — Tauri faylı tutmasın, ERP söhbətinə HTML5 drop çatsın
+    dragDropEnabled: false,
   }
 
   // 🔴 Yalnız DƏSTƏKLƏNƏN açar göndərilir (tiplərdə yoxlandı):

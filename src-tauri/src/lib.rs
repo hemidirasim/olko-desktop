@@ -868,11 +868,15 @@ fn ws_open_impl(app: &tauri::AppHandle, workspace: serde_json::Value) -> Result<
         .inspect(|d| { let _ = std::fs::create_dir_all(d); });
 
     let build = |isolated: bool| -> tauri::Result<tauri::WebviewWindow> {
+        // 🔴 v0.5.20 (ERP 54.163): Tauri-nin drag-drop handler-i OS-dan sürüşdürülən faylı ÖZÜ tutur və səhifəyə
+        // HTML5 `drop` (fayllı) ÖTÜRMÜR — ERP söhbətinə fayl sürüşdürüb atma tətbiqdə işləmirdi (brauzerdə işləyir).
+        // Tətbiq drag-drop hadisəsindən istifadə etmir → söndürmək təhlükəsizdir.
         let mut b = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url.clone()))
             .title(&title)
             .inner_size(1440.0, 900.0)
             .min_inner_size(1024.0, 700.0)
-            .center();
+            .center()
+            .disable_drag_drop_handler();
         if isolated {
             #[cfg(target_os = "macos")]
             {
@@ -956,8 +960,9 @@ pub fn run() {
                     let size = win.inner_size()?;
                     let w = size.width as f64 / scale;
                     let h = size.height as f64 / scale;
+                    // v0.5.20: ERP bu webview-də açılır → HTML5 fayl drop-u səhifəyə çatsın (yuxarıdakı qeydə bax)
                     win.add_child(
-                        WebviewBuilder::new("content", WebviewUrl::App("index.html".into())),
+                        WebviewBuilder::new("content", WebviewUrl::App("index.html".into())).disable_drag_drop_handler(),
                         LogicalPosition::new(0.0, 0.0),
                         LogicalSize::new((w - RAIL_W).max(200.0), h),
                     )?;
